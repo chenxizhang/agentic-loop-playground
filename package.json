@@ -25,8 +25,10 @@
     "test": "node --test test/workshop.test.js test/repo-analyzer.test.js",
     "test:practice": "node --test practice/test/inventory.test.js",
     "smoke:package": "node scripts/smoke-package.js",
+    "smoke:offline-package": "node scripts/smoke-offline-package.js",
+    "pack:offline": "node scripts/pack-offline-package.js",
     "verify:package": "npm run build && node scripts/verify-build.js && node scripts/verify-package.js",
-    "validate": "node --check src/launcher.js && node --check src/cli.js && node --check src/server.js && node --check src/copilot-chat.js && node --check src/curriculum.js && node --check src/validators.js && node --check src/progress.js && node --check src/repo-analyzer.js && node --check src/analyze-repo-worker.js && node --check public/app.js && node --check scripts/build-package.js && node --check scripts/smoke-package.js && node --check scripts/verify-build.js && node --check scripts/verify-package.js && node --check scripts/setup-github.js && node --check scripts/reset-scenario.js && node --check scripts/record-hook.js && node --check playground-template/scripts/setup-github.js && node --check playground-template/scripts/reset-scenario.js && npm test && npm run verify:package && npm run smoke:package",
+    "validate": "node --check src/launcher.js && node --check src/cli.js && node --check src/server.js && node --check src/copilot-chat.js && node --check src/curriculum.js && node --check src/validators.js && node --check src/progress.js && node --check src/repo-analyzer.js && node --check src/analyze-repo-worker.js && node --check public/app.js && node --check scripts/build-package.js && node --check scripts/pack-offline-package.js && node --check scripts/smoke-package.js && node --check scripts/smoke-offline-package.js && node --check scripts/verify-build.js && node --check scripts/verify-package.js && node --check scripts/setup-github.js && node --check scripts/reset-scenario.js && node --check scripts/record-hook.js && node --check playground-template/scripts/setup-github.js && node --check playground-template/scripts/reset-scenario.js && npm test && npm run verify:package && npm run smoke:package && npm run smoke:offline-package",
     "prepack": "npm run build && node scripts/verify-build.js",
     "prepublishOnly": "npm run validate"
   },

@@ -1,9 +1,15 @@
 import { execFileSync } from "node:child_process";
 
+const npmArguments = ["pack", "--dry-run", "--json", "--ignore-scripts"];
 const output = execFileSync(
-  process.platform === "win32" ? "npm.cmd" : "npm",
-  ["pack", "--dry-run", "--json", "--ignore-scripts"],
-  { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }
+  process.platform === "win32" ? process.env.ComSpec : "npm",
+  process.platform === "win32"
+    ? ["/d", "/s", "/c", "npm.cmd", ...npmArguments]
+    : npmArguments,
+  {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"]
+  }
 );
 const packageFiles = JSON.parse(output)[0].files.map(({ path }) => path);
 const allowedRoots = ["README.md", "package.json", "dist/"];

@@ -21,6 +21,19 @@ The path is resolved from the directory where `npx` runs. A non-empty directory 
 
 The launcher initializes local Git history, starts a loopback-only Node.js server, and opens the browser.
 
+## Install without public npm registry access
+
+Each GitHub Release provides platform-specific, self-contained npm tarballs for Windows x64, Linux x64, and macOS arm64. Download the asset that matches the target computer, transfer it through your approved internal channel if necessary, and install it without registry access:
+
+```powershell
+npm install --global --offline .\agentic-loop-playground-<version>-win32-x64.tgz
+agentic-loop-playground
+```
+
+Linux and macOS assets use the same naming pattern with `linux-x64` or `darwin-arm64`. The tarball bundles the Copilot SDK, Copilot runtime, and platform-specific native dependencies, so npm does not need to resolve packages from the public registry during installation. Other architectures require an asset built on that architecture or an approved internal npm proxy.
+
+If company policy also blocks GitHub Releases, place the downloaded asset in an approved internal artifact repository or shared software distribution location. An internal npm proxy such as Azure Artifacts, GitHub Packages, Artifactory, or Verdaccio is preferable for organization-wide distribution because it provides access control, retention, auditing, and repeatable installs.
+
 It does not teach Loop Engineering as a collection of definitions. Every lesson asks the learner to change the repository through the embedded Copilot workspace pane, use GitHub collaboration primitives, and pass an automated checkpoint.
 
 The browser pane is backed by the official GitHub Copilot SDK and is scoped to the generated playground repository. Workspace reads are allowed automatically. File writes, shell commands, URL access, MCP operations, and other elevated actions require explicit one-time approval in the browser.

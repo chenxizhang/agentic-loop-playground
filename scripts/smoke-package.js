@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 
 const temporaryRoot = mkdtempSync(join(tmpdir(), "agentic-loop-playground-package-"));
 const workspace = join(temporaryRoot, "workspace");
-const child = spawn(process.execPath, [resolve("dist/launcher.js"), workspace, "--no-open"], {
+const launcher = process.argv[2] ? resolve(process.argv[2]) : resolve("dist/launcher.js");
+const child = spawn(process.execPath, [launcher, workspace, "--no-open"], {
   env: { ...process.env, PORT: "0" },
   stdio: ["ignore", "pipe", "pipe"]
 });
@@ -76,7 +77,7 @@ try {
     readFileSync(resolve("playground-template/.loop-playground.json"))
   );
   symlinkSync(outsideDirectory, join(unsafeWorkspace, "docs"), process.platform === "win32" ? "junction" : "dir");
-  const unsafeLaunch = spawnSync(process.execPath, [resolve("dist/launcher.js"), unsafeWorkspace, "--no-open"], {
+  const unsafeLaunch = spawnSync(process.execPath, [launcher, unsafeWorkspace, "--no-open"], {
     env: { ...process.env, PORT: "0" },
     encoding: "utf8",
     timeout: 10_000
@@ -96,18 +97,22 @@ try {
     join(danglingWorkspace, ".loop-playground.json"),
     readFileSync(resolve("playground-template/.loop-playground.json"))
   );
-  symlinkSync(danglingTarget, join(danglingWorkspace, "AGENTS.md"), "file");
-  const danglingLaunch = spawnSync(process.execPath, [resolve("dist/launcher.js"), danglingWorkspace, "--no-open"], {
-    env: { ...process.env, PORT: "0" },
-    encoding: "utf8",
-    timeout: 10_000
-  });
-  if (
-    danglingLaunch.status === 0 ||
-    !`${danglingLaunch.stdout}${danglingLaunch.stderr}`.includes("Unsafe packaged template destination") ||
-    existsSync(danglingTarget)
-  ) {
-    throw new Error("Packaged template extraction did not reject a dangling destination symlink.");
+  try {
+    symlinkSync(danglingTarget, join(danglingWorkspace, "AGENTS.md"), "file");
+    const danglingLaunch = spawnSync(process.execPath, [launcher, danglingWorkspace, "--no-open"], {
+      env: { ...process.env, PORT: "0" },
+      encoding: "utf8",
+      timeout: 10_000
+    });
+    if (
+      danglingLaunch.status === 0 ||
+      !`${danglingLaunch.stdout}${danglingLaunch.stderr}`.includes("Unsafe packaged template destination") ||
+      existsSync(danglingTarget)
+    ) {
+      throw new Error("Packaged template extraction did not reject a dangling destination symlink.");
+    }
+  } catch (error) {
+    if (process.platform !== "win32" || error.code !== "EPERM") throw error;
   }
 
   console.log("Packaged launcher verified: server, browser assets, and repository worker are operational.");
