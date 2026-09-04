@@ -10,8 +10,10 @@ import { repositoryAnalysisPrerequisites } from "./repo-analyzer.js";
 import { CopilotChatService } from "./copilot-chat.js";
 
 const host = "127.0.0.1";
-const port = Number(process.env.PORT || 4173);
-const publicDirectory = fileURLToPath(new URL("../public", import.meta.url));
+const configuredPort = Number(process.env.PORT || 4173);
+let activePort = configuredPort;
+const packaged = typeof __PACKAGED__ !== "undefined" && __PACKAGED__;
+const publicDirectory = fileURLToPath(new URL(packaged ? "./public/" : "../public/", import.meta.url));
 const repositoryWorker = fileURLToPath(new URL("./analyze-repo-worker.js", import.meta.url));
 const copilotChat = new CopilotChatService(process.cwd());
 const contentTypes = {
@@ -65,7 +67,7 @@ function resetScenario() {
 
 function canMutate(request) {
   const hostHeader = request.headers.host ?? "";
-  const allowedHost = hostHeader === `${host}:${port}` || hostHeader === `localhost:${port}`;
+  const allowedHost = hostHeader === `${host}:${activePort}` || hostHeader === `localhost:${activePort}`;
   const origin = request.headers.origin;
   const sameOrigin = !origin || origin === `http://${hostHeader}`;
   return allowedHost && sameOrigin && request.headers["x-loop-lab"] === "browser";
@@ -283,7 +285,7 @@ function serveStatic(response, pathname) {
 const server = createServer((request, response) => {
   let url;
   try {
-    url = new URL(request.url, `http://${host}:${port}`);
+    url = new URL(request.url, `http://${host}:${activePort}`);
   } catch {
     response.writeHead(400);
     response.end("Invalid request URL");
@@ -302,8 +304,10 @@ const server = createServer((request, response) => {
   serveStatic(response, url.pathname);
 });
 
-server.listen(port, host, () => {
-  const url = `http://${host}:${port}`;
+server.listen(configuredPort, host, () => {
+  const address = server.address();
+  activePort = typeof address === "object" && address ? address.port : configuredPort;
+  const url = `http://${host}:${activePort}`;
   console.log(`Agentic Loop Playground is running at ${url}`);
   console.log("Press Ctrl+C to stop.");
   if (process.argv.includes("--open")) {

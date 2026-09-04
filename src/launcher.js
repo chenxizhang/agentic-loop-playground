@@ -1,13 +1,34 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const templateRoot = resolve(packageRoot, "playground-template");
-const templateMarker = JSON.parse(readFileSync(resolve(templateRoot, ".loop-playground.json"), "utf8"));
+const packaged = typeof __PACKAGED__ !== "undefined" && __PACKAGED__;
+const templateArchive = resolve(packageRoot, "dist/playground-template.json.gz");
+const templateEntries = packaged
+  ? JSON.parse(gunzipSync(readFileSync(templateArchive)))
+  : null;
+const markerEntry = templateEntries?.find(({ path }) => path === ".loop-playground.json");
+const templateMarker = JSON.parse(
+  markerEntry
+    ? Buffer.from(markerEntry.content, "base64").toString("utf8")
+    : readFileSync(resolve(templateRoot, ".loop-playground.json"), "utf8")
+);
 const currentDirectory = process.cwd();
 const launcherArguments = process.argv.slice(2);
 const positionalArguments = launcherArguments.filter((argument) => !argument.startsWith("-"));
@@ -47,8 +68,53 @@ function runGit(args, options = {}) {
   }
 }
 
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function copyPackagedTemplate() {
+  for (const entry of templateEntries) {
+    const pathSegments = entry.path.split("/");
+    if (pathSegments.some((segment) => !segment || segment === "." || segment === "..")) {
+      throw new Error(`Invalid packaged template path: ${entry.path}`);
+    }
+    const destination = resolve(workspaceRoot, entry.path);
+    const workspaceRelativePath = relative(workspaceRoot, destination);
+    if (!workspaceRelativePath || workspaceRelativePath.startsWith("..") || isAbsolute(workspaceRelativePath)) {
+      throw new Error(`Invalid packaged template path: ${entry.path}`);
+    }
+
+    let parent = workspaceRoot;
+    for (const segment of pathSegments.slice(0, -1)) {
+      parent = resolve(parent, segment);
+      const stats = lstatIfPresent(parent);
+      if (!stats) continue;
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error(`Unsafe packaged template parent: ${relative(workspaceRoot, parent)}`);
+      }
+    }
+    const destinationStats = lstatIfPresent(destination);
+    if (destinationStats) {
+      if (destinationStats.isSymbolicLink()) {
+        throw new Error(`Unsafe packaged template destination: ${entry.path}`);
+      }
+      continue;
+    }
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, Buffer.from(entry.content, "base64"), { mode: entry.mode });
+  }
+}
+
 function scaffoldWorkspace() {
-  if (!existsSync(templateRoot)) {
+  if (packaged && !templateEntries) {
+    throw new Error(`Playground template archive is missing: ${templateArchive}`);
+  }
+  if (!packaged && !existsSync(templateRoot)) {
     throw new Error(`Playground template is missing: ${templateRoot}`);
   }
 
@@ -63,7 +129,11 @@ function scaffoldWorkspace() {
   }
 
   const existingMarkerPath = resolve(workspaceRoot, ".loop-playground.json");
-  if (existsSync(existingMarkerPath)) {
+  const existingMarkerStats = lstatIfPresent(existingMarkerPath);
+  if (existingMarkerStats) {
+    if (existingMarkerStats.isSymbolicLink()) {
+      throw new Error(`Playground marker cannot be a symbolic link: ${existingMarkerPath}`);
+    }
     const existingMarker = JSON.parse(readFileSync(existingMarkerPath, "utf8"));
     if (
       existingMarker.schemaVersion !== templateMarker.schemaVersion ||
@@ -77,11 +147,15 @@ function scaffoldWorkspace() {
   }
 
   mkdirSync(workspaceRoot, { recursive: true });
-  cpSync(templateRoot, workspaceRoot, {
-    recursive: true,
-    force: false,
-    errorOnExist: false
-  });
+  if (packaged) {
+    copyPackagedTemplate();
+  } else {
+    cpSync(templateRoot, workspaceRoot, {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
+  }
 
   const stagedGitignore = resolve(workspaceRoot, "gitignore.template");
   const gitignore = resolve(workspaceRoot, ".gitignore");

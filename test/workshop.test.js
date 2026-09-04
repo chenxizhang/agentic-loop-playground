@@ -94,7 +94,7 @@ test("application uses a package slug and a polished display brand", () => {
   const retiredBrands = /agentic-loop-engineering-playground|Agentic Loop Engineering Playground|Copilot Loop Lab/;
 
   assert.equal(packageMetadata.name, "agentic-loop-playground");
-  assert.equal(packageMetadata.bin["agentic-loop-playground"], "src/launcher.js");
+  assert.equal(packageMetadata.bin["agentic-loop-playground"], "dist/launcher.js");
   assert.match(packageLock, /agentic-loop-playground/);
   for (const source of [readme, index, templateMarker]) {
     assert.doesNotMatch(source, retiredBrands);
