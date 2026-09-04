@@ -1,0 +1,40 @@
+{
+  "name": "agentic-loop-playground",
+  "version": "1.0.0",
+  "description": "Agentic Loop Playground is a local interactive Loop Engineering workshop powered by GitHub Copilot.",
+  "type": "module",
+  "bin": {
+    "agentic-loop-playground": "src/launcher.js"
+  },
+  "files": [
+    "public",
+    "src",
+    "playground-template",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node src/launcher.js",
+    "cli": "node src/cli.js",
+    "web": "node src/server.js",
+    "web:open": "node src/server.js --open",
+    "doctor": "node src/cli.js doctor",
+    "status": "node src/cli.js status",
+    "check": "node src/cli.js check",
+    "grade": "node src/cli.js grade",
+    "scenario:reset": "node scripts/reset-scenario.js",
+    "github:setup": "node scripts/setup-github.js",
+    "test": "node --test test/workshop.test.js test/repo-analyzer.test.js",
+    "test:practice": "node --test practice/test/inventory.test.js",
+    "validate": "node --check src/launcher.js && node --check src/cli.js && node --check src/server.js && node --check src/copilot-chat.js && node --check src/curriculum.js && node --check src/validators.js && node --check src/progress.js && node --check src/repo-analyzer.js && node --check src/analyze-repo-worker.js && node --check public/app.js && node --check scripts/setup-github.js && node --check scripts/reset-scenario.js && node --check scripts/record-hook.js && node --check playground-template/scripts/setup-github.js && node --check playground-template/scripts/reset-scenario.js && npm test"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@github/copilot-sdk": "1.0.11"
+  }
+}

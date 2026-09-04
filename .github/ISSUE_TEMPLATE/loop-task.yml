@@ -1,0 +1,34 @@
+name: Loop task
+description: Define a bounded task that an engineering loop can safely discover
+title: "[Loop] "
+labels: ["loop:ready"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: Define one measurable outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: observations
+    attributes:
+      label: Observable starting evidence
+      description: List repository or GitHub signals that reveal the current state.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List deterministic checks that can disprove completion.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundaries and stop conditions
+      description: State forbidden changes, budgets, and human escalation conditions.
+    validations:
+      required: true
+

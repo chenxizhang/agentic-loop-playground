@@ -1,0 +1,37 @@
+name: Loop health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate the platform
+        id: validate
+        continue-on-error: true
+        run: npm run validate
+      - name: Record a failed loop observation
+        if: steps.validate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing="$(gh issue list --label loop:verify --search '"Loop health validation failed" in:title' --state open --json number --jq 'length')"
+          if [ "$existing" = "0" ]; then
+            gh issue create \
+              --title "Loop health validation failed" \
+              --label "loop:verify" \
+              --body "The scheduled platform validation failed. Observe the workflow run, reproduce locally with \`npm run validate\`, and stop if the failure requires a product or policy decision."
+          fi
+          exit 1
+

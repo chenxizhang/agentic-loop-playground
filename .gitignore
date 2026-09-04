@@ -1,0 +1,6 @@
+node_modules/
+.playwright-mcp/
+.workshop/progress.json
+.workshop/hook-events.jsonl
+.workshop/tmp/
+coverage/

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="application-name" content="agentic-loop-playground">
+    <meta name="description" content="Agentic Loop Playground is an interactive Loop Engineering workshop powered by GitHub Copilot">
+    <title>Agentic Loop Playground</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">∞</div>
+          <div>
+            <strong class="brand-name">Agentic Loop <em>Playground</em></strong>
+            <span>Closed-Loop Engineering Workshop</span>
+          </div>
+        </div>
+
+        <div class="progress-card">
+          <div class="progress-heading">
+            <span>Learning Progress</span>
+            <strong id="progress-label">0 / 9</strong>
+          </div>
+          <div class="progress-track"><div id="progress-bar"></div></div>
+          <p id="progress-message">Start with the environment check and build your first engineering loop.</p>
+        </div>
+
+        <nav id="lesson-nav" aria-label="Course labs"></nav>
+
+        <div class="sidebar-actions">
+          <button id="repository-button" class="button button-secondary repo-button">Analyze Repository</button>
+          <button id="doctor-button" class="button button-secondary">Check Environment</button>
+          <button id="grade-button" class="button button-primary">View Final Score</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">GITHUB COPILOT × GITHUB REPOSITORIES</span>
+            <h1>From Prompts to Verifiable Engineering Loops</h1>
+          </div>
+          <div id="runtime-status" class="status-pill" title="Loading workspace"><span></span> Local Lab</div>
+        </header>
+
+        <section id="lesson-view" class="lesson-view" aria-live="polite">
+          <div class="loading">Loading course…</div>
+        </section>
+      </main>
+
+      <aside class="copilot-pane">
+        <header class="copilot-header">
+          <div>
+            <span class="eyebrow">COPILOT SDK</span>
+            <h2>Lab Conversation</h2>
+            <div class="copilot-workspace" title="Active workspace">
+              <span>WORKSPACE</span>
+              <code id="workspace-path">Loading…</code>
+              <button id="copy-workspace-path" type="button" title="Copy workspace path" aria-label="Copy workspace path">⧉</button>
+            </div>
+          </div>
+          <div class="copilot-header-actions">
+            <button id="copilot-reset" class="icon-button" title="New session" aria-label="New session">↻</button>
+            <span id="copilot-status" class="copilot-status"><i></i>Disconnected</span>
+          </div>
+        </header>
+
+        <div id="copilot-messages" class="copilot-messages">
+          <div class="copilot-welcome">
+            <div class="brand-mark">∞</div>
+            <h3>Complete the lab here</h3>
+            <p>Copilot can read files, edit code, and run validation in the active workspace. File writes, shell commands, network access, and GitHub operations require your approval.</p>
+            <button id="copilot-connect" class="button button-primary">Connect GitHub Copilot</button>
+          </div>
+        </div>
+
+        <div id="copilot-permissions" class="copilot-permissions"></div>
+
+        <form id="copilot-form" class="copilot-composer">
+          <textarea id="copilot-input" rows="3" placeholder="Tell Copilot what to do. Enter to send, Shift+Enter for a new line."></textarea>
+          <div class="copilot-composer-footer">
+            <span id="copilot-tool-status">Workspace agent</span>
+            <div>
+              <button id="copilot-abort" class="composer-button abort-button" type="button" title="Stop current operation">■</button>
+              <button id="copilot-send" class="composer-button send-button" type="submit" title="Send">↑</button>
+            </div>
+          </div>
+        </form>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" role="status"></div>
+
+    <dialog id="result-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">LOOP EVIDENCE</span>
+          <h2 id="dialog-title">Validation Results</h2>
+        </div>
+        <button id="dialog-close" class="icon-button" aria-label="Close">×</button>
+      </div>
+      <div id="dialog-content"></div>
+    </dialog>
+
+    <dialog id="repository-dialog" class="repository-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">REPOSITORY READINESS</span>
+          <h2>Analyze GitHub Repository</h2>
+        </div>
+        <button id="repository-dialog-close" class="icon-button" aria-label="Close">×</button>
+      </div>
+      <div class="repository-content">
+        <p class="repository-intro">Enter a GitHub repository URL. The platform performs a temporary, read-only static analysis without running repository scripts, tests, or hooks.</p>
+        <form id="repository-form">
+          <label for="repository-url">GitHub repository</label>
+          <div class="repository-input-row">
+            <input id="repository-url" name="repository" type="url" required placeholder="https://github.com/owner/repository" autocomplete="off">
+            <button id="repository-submit" class="button button-primary" type="submit">Start Analysis</button>
+          </div>
+        </form>
+        <section class="prerequisites">
+          <h3>Local Prerequisites</h3>
+          <div id="repository-prerequisites" class="prerequisite-grid">
+            <div class="loading-inline">Checking…</div>
+          </div>
+        </section>
+        <section id="repository-result" class="repository-result" aria-live="polite"></section>
+      </div>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

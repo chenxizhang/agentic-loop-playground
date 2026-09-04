@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "node scripts/record-hook.js",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "command": "node scripts/record-hook.js",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

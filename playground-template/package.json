@@ -1,0 +1,15 @@
+{
+  "name": "agentic-loop-playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/workspace.test.js",
+    "test:practice": "node --test practice/test/inventory.test.js",
+    "validate": "node --check practice/src/inventory.js && npm test",
+    "scenario:reset": "node scripts/reset-scenario.js",
+    "github:setup": "node scripts/setup-github.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
