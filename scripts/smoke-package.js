@@ -72,6 +72,17 @@ try {
   ) {
     throw new Error("Packaged launcher did not safely select and populate its fallback workspace.");
   }
+  const branch = spawnSync("git", ["branch", "--show-current"], {
+    cwd: workspace,
+    encoding: "utf8"
+  });
+  if (
+    branch.status !== 0 ||
+    branch.stdout.trim() !== "master" ||
+    output.includes("Using 'master' as the name for the initial branch")
+  ) {
+    throw new Error(`Packaged launcher did not initialize a quiet master branch.\n${output}`);
+  }
 
   const unsafeWorkspace = join(temporaryRoot, "unsafe-parent-workspace");
   const outsideDirectory = join(temporaryRoot, "outside");

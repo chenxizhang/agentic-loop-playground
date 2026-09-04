@@ -188,8 +188,8 @@ function scaffoldWorkspace() {
 
   if (!existsSync(resolve(workspaceRoot, ".git"))) {
     runGit(["--version"], { quiet: true });
-    runGit(["init"]);
-    runGit(["branch", "-M", "main"]);
+    runGit(["init", "--quiet"]);
+    runGit(["branch", "-M", "master"]);
     const topLevel = runGit(["rev-parse", "--show-toplevel"], { quiet: true });
     if (canonicalPath(topLevel) !== canonicalPath(workspaceRoot)) {
       throw new Error(`Git initialized an unexpected repository root: ${topLevel}`);
