@@ -9,7 +9,7 @@ function readOption(name) {
 }
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const version = readOption("--version");
+const version = readOption("--version") ?? process.env.RELEASE_VERSION;
 if (!version) {
   throw new Error("Provide the published version with --version.");
 }

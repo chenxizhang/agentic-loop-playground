@@ -9,7 +9,7 @@ function readOption(name, fallback) {
 }
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const version = readOption("--version", packageJson.version);
+const version = readOption("--version", process.env.RELEASE_VERSION ?? packageJson.version);
 const temporaryRoot = mkdtempSync(join(tmpdir(), "agentic-loop-playground-offline-"));
 const packageDirectory = join(temporaryRoot, "package");
 const installDirectory = join(temporaryRoot, "install");

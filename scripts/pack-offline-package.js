@@ -10,8 +10,8 @@ function readOption(name, fallback) {
 const packagePath = resolve("package.json");
 const originalPackage = readFileSync(packagePath, "utf8");
 const packageJson = JSON.parse(originalPackage);
-const version = readOption("--version", packageJson.version);
-const outputDirectory = resolve(readOption("--output", "release"));
+const version = readOption("--version", process.env.RELEASE_VERSION ?? packageJson.version);
+const outputDirectory = resolve(readOption("--output", process.env.RELEASE_OUTPUT ?? "release"));
 const bundledDependencies = Object.keys(packageJson.dependencies ?? {});
 
 if (bundledDependencies.length === 0) {

@@ -93,10 +93,15 @@ jobs:
         run: npm ci
 
       - name: Build and verify the offline package
-        run: npm run smoke:offline-package -- --version ${{ needs.prepare.outputs.version }}
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: npm run smoke:offline-package
 
       - name: Create the release asset
-        run: npm run pack:offline -- --version ${{ needs.prepare.outputs.version }} --output release
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_OUTPUT: release
+        run: npm run pack:offline
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -207,7 +212,9 @@ jobs:
           package-manager-cache: false
 
       - name: Download, install, and launch the published package
-        run: npm run smoke:published-package -- --version ${{ needs.prepare.outputs.version }}
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: npm run smoke:published-package
 
   release:
     needs: [prepare, package-offline, publish, verify-published]
