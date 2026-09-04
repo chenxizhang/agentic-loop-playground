@@ -1,17 +1,67 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const temporaryRoot = mkdtempSync(join(tmpdir(), "agentic-loop-playground-package-"));
-const occupiedDefault = join(temporaryRoot, "agentic-loop-playground");
 const workspace = join(temporaryRoot, "agentic-loop-playground-workspace");
 const launcher = process.argv[2] ? resolve(process.argv[2]) : resolve("dist/launcher.js");
-mkdirSync(occupiedDefault);
-writeFileSync(join(occupiedDefault, "existing.txt"), "do not overwrite");
-const child = spawn(process.execPath, [launcher, "--no-open"], {
+
+const help = spawnSync(process.execPath, [launcher, "--help"], {
   cwd: temporaryRoot,
-  env: { ...process.env, PORT: "0" },
+  encoding: "utf8"
+});
+if (
+  help.status !== 0 ||
+  !help.stdout.includes("agentic-loop-playground eval") ||
+  existsSync(workspace)
+) {
+  throw new Error(`Packaged launcher help was not side-effect free.\n${help.stdout}${help.stderr}`);
+}
+
+const nonPlayground = join(temporaryRoot, "existing-project");
+mkdirSync(nonPlayground);
+writeFileSync(join(nonPlayground, "existing.txt"), "do not overwrite");
+const unsafeDirectory = spawnSync(process.execPath, [launcher, nonPlayground, "--no-open"], {
+  cwd: temporaryRoot,
+  encoding: "utf8"
+});
+if (
+  unsafeDirectory.status === 0 ||
+  !`${unsafeDirectory.stdout}${unsafeDirectory.stderr}`.includes("is not an Agentic Loop Playground directory") ||
+  !existsSync(join(nonPlayground, "existing.txt"))
+) {
+  throw new Error("Packaged launcher did not reject a non-playground directory with a warning.");
+}
+
+const fakePlayground = join(temporaryRoot, "fake-playground");
+mkdirSync(fakePlayground);
+writeFileSync(
+  join(fakePlayground, ".loop-playground.json"),
+  JSON.stringify({ name: "Unrelated Project", schemaVersion: 1, templateVersion: "1.0.0" })
+);
+const fakeMarker = spawnSync(process.execPath, [launcher, fakePlayground, "--no-open"], {
+  cwd: temporaryRoot,
+  encoding: "utf8"
+});
+if (
+  fakeMarker.status === 0 ||
+  !`${fakeMarker.stdout}${fakeMarker.stderr}`.includes("unrecognized or incompatible playground marker") ||
+  existsSync(join(fakePlayground, "practice"))
+) {
+  throw new Error("Packaged launcher accepted a forged playground marker.");
+}
+
+const occupiedPortServer = createServer();
+await new Promise((resolveListen, rejectListen) => {
+  occupiedPortServer.once("error", rejectListen);
+  occupiedPortServer.listen(0, "127.0.0.1", resolveListen);
+});
+const occupiedPort = occupiedPortServer.address().port;
+const child = spawn(process.execPath, [launcher, "--no-open", "--port", String(occupiedPort)], {
+  cwd: temporaryRoot,
+  env: process.env,
   stdio: ["ignore", "pipe", "pipe"]
 });
 let output = "";
@@ -67,10 +117,15 @@ try {
   }
   if (
     !existsSync(join(workspace, ".loop-playground.json")) ||
-    !existsSync(join(workspace, "practice/src/inventory.js")) ||
-    !existsSync(join(occupiedDefault, "existing.txt"))
+    !existsSync(join(workspace, "practice/src/inventory.js"))
   ) {
-    throw new Error("Packaged launcher did not safely select and populate its fallback workspace.");
+    throw new Error("Packaged launcher did not populate its default workspace.");
+  }
+  if (
+    new URL(origin).port === String(occupiedPort) ||
+    !output.includes(`Port ${occupiedPort} is already in use; selecting an available port.`)
+  ) {
+    throw new Error(`Packaged launcher did not recover from an occupied port.\n${output}`);
   }
   const branch = spawnSync("git", ["branch", "--show-current"], {
     cwd: workspace,
@@ -134,5 +189,6 @@ try {
   console.log("Packaged launcher verified: server, browser assets, and repository worker are operational.");
 } finally {
   child.kill("SIGTERM");
+  occupiedPortServer.close();
   rmSync(temporaryRoot, { recursive: true, force: true });
 }

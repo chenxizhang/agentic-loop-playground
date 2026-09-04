@@ -10,7 +10,10 @@ import { repositoryAnalysisPrerequisites } from "./repo-analyzer.js";
 import { CopilotChatService } from "./copilot-chat.js";
 
 const host = "127.0.0.1";
-const configuredPort = Number(process.env.PORT || 4173);
+const configuredPort = Number(process.env.PORT ?? 4173);
+if (!Number.isInteger(configuredPort) || configuredPort < 0 || configuredPort > 65535) {
+  throw new Error(`Invalid PORT value: ${process.env.PORT}`);
+}
 let activePort = configuredPort;
 const packaged = typeof __PACKAGED__ !== "undefined" && __PACKAGED__;
 const publicDirectory = fileURLToPath(new URL(packaged ? "./public/" : "../public/", import.meta.url));
@@ -304,7 +307,19 @@ const server = createServer((request, response) => {
   serveStatic(response, url.pathname);
 });
 
-server.listen(configuredPort, host, () => {
+let usedFallbackPort = false;
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE" && configuredPort !== 0 && !usedFallbackPort) {
+    usedFallbackPort = true;
+    console.warn(`Port ${configuredPort} is already in use; selecting an available port.`);
+    server.listen(0, host);
+    return;
+  }
+  throw error;
+});
+
+server.on("listening", () => {
   const address = server.address();
   activePort = typeof address === "object" && address ? address.port : configuredPort;
   const url = `http://${host}:${activePort}`;
@@ -320,3 +335,5 @@ server.listen(configuredPort, host, () => {
     }
   }
 });
+
+server.listen(configuredPort, host);

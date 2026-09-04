@@ -10,14 +10,22 @@ After the package is published, start it from any directory:
 npx -y agentic-loop-playground
 ```
 
-Without a path, the command creates an isolated `agentic-loop-playground` repository under the current directory. If that name is already occupied by a non-playground directory, it safely falls back to `agentic-loop-playground-workspace`. Pass one positional path to choose an empty directory or an existing playground:
+Without a path, the command creates or resumes `./agentic-loop-playground-workspace`. Pass one positional path to choose another empty directory or an existing playground:
 
 ```shell
 npx -y agentic-loop-playground .
 npx -y agentic-loop-playground ./my-loop-lab
+npx -y agentic-loop-playground ./my-loop-lab --port 4173
 ```
 
-The path is resolved from the directory where `npx` runs. A non-empty directory that is not already a playground is rejected to prevent accidental changes to an existing project. `AGENTIC_LOOP_PLAYGROUND_WORKSPACE` is available as an environment-variable alternative; an explicit positional path takes precedence.
+The path is resolved from the directory where `npx` runs. Missing and empty directories are initialized automatically. A non-empty directory without a compatible `.loop-playground.json` marker is rejected with a safety warning. `AGENTIC_LOOP_PLAYGROUND_WORKSPACE` is available as an environment-variable alternative; an explicit positional path takes precedence. Use `-p, --port` to request a port; if it is occupied, the launcher automatically selects an available port.
+
+Run `npx -y agentic-loop-playground --help` for all options. Score a remote GitHub repository without starting the browser:
+
+```shell
+npx -y agentic-loop-playground eval github/docs
+npx -y agentic-loop-playground eval https://github.com/github/docs --json
+```
 
 The launcher initializes local Git history, starts a loopback-only Node.js server, and opens the browser.
 

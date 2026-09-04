@@ -31,30 +31,93 @@ const templateMarker = JSON.parse(
     : readFileSync(resolve(templateRoot, ".loop-playground.json"), "utf8")
 );
 const currentDirectory = process.cwd();
-const launcherArguments = process.argv.slice(2);
-const positionalArguments = launcherArguments.filter((argument) => !argument.startsWith("-"));
-const unknownOptions = launcherArguments.filter(
-  (argument) => argument.startsWith("-") && argument !== "--open" && argument !== "--no-open"
-);
+let workspaceRoot;
 
-if (unknownOptions.length > 0) {
-  throw new Error(`Unknown option: ${unknownOptions[0]}`);
-}
-if (positionalArguments.length > 1) {
-  throw new Error("Provide at most one workspace directory.");
+function printHelp() {
+  console.log(`Agentic Loop Playground
+
+Usage:
+  agentic-loop-playground [directory] [options]
+  agentic-loop-playground eval <owner/repository|URL> [--json]
+
+Options:
+  -h, --help         Show this help information
+  -p, --port <port>  Preferred local port (0 selects a dynamic port)
+      --open         Open the browser after startup (default)
+      --no-open      Do not open the browser
+
+The default directory is ./agentic-loop-playground-workspace. A missing or empty
+directory is initialized automatically. An existing directory must contain a
+compatible .loop-playground.json marker.
+
+Examples:
+  agentic-loop-playground
+  agentic-loop-playground ./my-loop-lab --port 4173
+  agentic-loop-playground eval github/docs
+  agentic-loop-playground eval https://github.com/github/docs --json`);
 }
 
-const requestedWorkspace = positionalArguments[0] ?? process.env.AGENTIC_LOOP_PLAYGROUND_WORKSPACE;
-const currentMarker = resolve(currentDirectory, ".loop-playground.json");
-const defaultWorkspace = resolve(currentDirectory, "agentic-loop-playground");
-const fallbackWorkspace = resolve(currentDirectory, "agentic-loop-playground-workspace");
-const workspaceRoot = requestedWorkspace
-  ? resolve(currentDirectory, requestedWorkspace)
-  : existsSync(currentMarker)
-    ? currentDirectory
-    : isOccupiedNonPlayground(defaultWorkspace)
-      ? fallbackWorkspace
-      : defaultWorkspace;
+function readOptionValue(argumentsList, index, option) {
+  const value = argumentsList[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${option} requires a value.`);
+  }
+  return value;
+}
+
+function parsePort(value) {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Invalid port: ${value}. Use an integer from 0 to 65535.`);
+  }
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port > 65535) {
+    throw new Error(`Invalid port: ${value}. Use an integer from 0 to 65535.`);
+  }
+  return port;
+}
+
+function parseInvocation(argumentsList) {
+  if (argumentsList.includes("-h") || argumentsList.includes("--help")) {
+    return { command: "help" };
+  }
+  if (argumentsList[0] === "eval") {
+    const evaluationArguments = argumentsList.slice(1);
+    const json = evaluationArguments.includes("--json");
+    const unknown = evaluationArguments.find(
+      (argument) => argument.startsWith("-") && argument !== "--json"
+    );
+    if (unknown) throw new Error(`Unknown eval option: ${unknown}`);
+    const repositories = evaluationArguments.filter((argument) => argument !== "--json");
+    if (repositories.length !== 1) {
+      throw new Error("Usage: agentic-loop-playground eval <owner/repository|URL> [--json]");
+    }
+    return { command: "eval", repository: repositories[0], json };
+  }
+
+  let directory;
+  let port;
+  let open;
+  for (let index = 0; index < argumentsList.length; index += 1) {
+    const argument = argumentsList[index];
+    if (argument === "--open") {
+      open = true;
+    } else if (argument === "--no-open") {
+      open = false;
+    } else if (argument === "-p" || argument === "--port") {
+      port = parsePort(readOptionValue(argumentsList, index, argument));
+      index += 1;
+    } else if (argument.startsWith("--port=")) {
+      port = parsePort(argument.slice("--port=".length));
+    } else if (argument.startsWith("-")) {
+      throw new Error(`Unknown option: ${argument}`);
+    } else if (directory) {
+      throw new Error("Provide at most one workspace directory.");
+    } else {
+      directory = argument;
+    }
+  }
+  return { command: "start", directory, port, open };
+}
 
 function runGit(args, options = {}) {
   try {
@@ -80,15 +143,6 @@ function lstatIfPresent(path) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
-}
-
-function isOccupiedNonPlayground(path) {
-  const stats = lstatIfPresent(path);
-  return Boolean(
-    stats?.isDirectory() &&
-    !existsSync(resolve(path, ".loop-playground.json")) &&
-    readdirSync(path).length > 0
-  );
 }
 
 function canonicalPath(path) {
@@ -141,8 +195,9 @@ function scaffoldWorkspace() {
     const entries = readdirSync(workspaceRoot);
     if (entries.length > 0) {
       throw new Error(
-        `Refusing to write into non-playground directory: ${workspaceRoot}\n` +
-        "Choose an empty directory, an existing playground, or omit the path to create ./agentic-loop-playground."
+        `WARNING: ${workspaceRoot} is not an Agentic Loop Playground directory.\n` +
+        "Continuing could mix workshop files with unrelated content, so startup was stopped.\n" +
+        "Recommended: choose an empty directory or an existing directory containing .loop-playground.json."
       );
     }
   }
@@ -155,12 +210,13 @@ function scaffoldWorkspace() {
     }
     const existingMarker = JSON.parse(readFileSync(existingMarkerPath, "utf8"));
     if (
+      existingMarker.name !== templateMarker.name ||
       existingMarker.schemaVersion !== templateMarker.schemaVersion ||
       existingMarker.templateVersion !== templateMarker.templateVersion
     ) {
       throw new Error(
-        `Workspace template ${existingMarker.templateVersion ?? "unknown"} is incompatible with ${templateMarker.templateVersion}.\n` +
-        "Choose a new directory argument or set AGENTIC_LOOP_PLAYGROUND_WORKSPACE to preserve the existing learner workspace."
+        `WARNING: ${workspaceRoot} has an unrecognized or incompatible playground marker.\n` +
+        "Recommended: choose a new empty directory or a compatible Agentic Loop Playground workspace."
       );
     }
   }
@@ -208,16 +264,61 @@ function scaffoldWorkspace() {
   }
 }
 
-scaffoldWorkspace();
-process.chdir(workspaceRoot);
-process.env.AGENTIC_LOOP_PLAYGROUND_WORKSPACE = workspaceRoot;
-
-console.log("\nAgentic Loop Playground");
-console.log(`Workspace: ${workspaceRoot}`);
-console.log("The browser UI is local; repository checks run against this workspace.\n");
-
-if (!process.argv.includes("--open") && !process.argv.includes("--no-open")) {
-  process.argv.push("--open");
+function printEvaluation(result) {
+  console.log(`\nRepository: ${result.repository}`);
+  console.log(`Score: ${result.score}/${result.maximum}`);
+  console.log(`Level: ${result.level}\n`);
+  for (const category of result.categories) {
+    console.log(`${category.earned}/${category.maximum}  ${category.title}`);
+  }
+  console.log(`\nScanned files: ${result.scannedFiles}${result.truncated ? " (truncated)" : ""}`);
 }
 
-await import("./server.js");
+async function main() {
+  const invocation = parseInvocation(process.argv.slice(2));
+  if (invocation.command === "help") {
+    printHelp();
+    return;
+  }
+  if (invocation.command === "eval") {
+    const { analyzeGithubRepository } = await import("./repo-analyzer.js");
+    const result = analyzeGithubRepository(invocation.repository);
+    if (invocation.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      printEvaluation(result);
+    }
+    return;
+  }
+
+  const requestedWorkspace = invocation.directory ?? process.env.AGENTIC_LOOP_PLAYGROUND_WORKSPACE;
+  workspaceRoot = resolve(
+    currentDirectory,
+    requestedWorkspace ?? "agentic-loop-playground-workspace"
+  );
+  if (invocation.port !== undefined) {
+    process.env.PORT = String(invocation.port);
+  }
+  if (invocation.open ?? true) {
+    process.argv.push("--open");
+  } else {
+    process.argv.push("--no-open");
+  }
+
+  scaffoldWorkspace();
+  process.chdir(workspaceRoot);
+  process.env.AGENTIC_LOOP_PLAYGROUND_WORKSPACE = workspaceRoot;
+
+  console.log("\nAgentic Loop Playground");
+  console.log(`Workspace: ${workspaceRoot}`);
+  console.log("The browser UI is local; repository checks run against this workspace.\n");
+
+  await import("./server.js");
+}
+
+try {
+  await main();
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
