@@ -30,16 +30,13 @@ packageJson.bundleDependencies = bundledDependencies;
 try {
   writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
   const npmArguments = ["pack", "--json", "--pack-destination", outputDirectory];
-  const output = execFileSync(
-    process.platform === "win32" ? process.env.ComSpec : "npm",
-    process.platform === "win32"
-      ? ["/d", "/s", "/c", "npm.cmd", ...npmArguments]
-      : npmArguments,
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"]
-    }
-  );
+  if (!process.env.npm_execpath) {
+    throw new Error("npm_execpath is unavailable; run this command through npm.");
+  }
+  const output = execFileSync(process.execPath, [process.env.npm_execpath, ...npmArguments], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"]
+  });
   const outputLines = output.split(/\r?\n/);
   const jsonStart = outputLines.findIndex((line) => line === "[");
   const jsonEnd = outputLines.findLastIndex((line) => line === "]");

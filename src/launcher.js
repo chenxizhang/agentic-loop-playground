@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync
@@ -45,11 +46,15 @@ if (positionalArguments.length > 1) {
 
 const requestedWorkspace = positionalArguments[0] ?? process.env.AGENTIC_LOOP_PLAYGROUND_WORKSPACE;
 const currentMarker = resolve(currentDirectory, ".loop-playground.json");
+const defaultWorkspace = resolve(currentDirectory, "agentic-loop-playground");
+const fallbackWorkspace = resolve(currentDirectory, "agentic-loop-playground-workspace");
 const workspaceRoot = requestedWorkspace
   ? resolve(currentDirectory, requestedWorkspace)
   : existsSync(currentMarker)
     ? currentDirectory
-    : resolve(currentDirectory, "agentic-loop-playground");
+    : isOccupiedNonPlayground(defaultWorkspace)
+      ? fallbackWorkspace
+      : defaultWorkspace;
 
 function runGit(args, options = {}) {
   try {
@@ -75,6 +80,20 @@ function lstatIfPresent(path) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+function isOccupiedNonPlayground(path) {
+  const stats = lstatIfPresent(path);
+  return Boolean(
+    stats?.isDirectory() &&
+    !existsSync(resolve(path, ".loop-playground.json")) &&
+    readdirSync(path).length > 0
+  );
+}
+
+function canonicalPath(path) {
+  const canonical = realpathSync.native(resolve(path));
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
 function copyPackagedTemplate() {
@@ -172,7 +191,7 @@ function scaffoldWorkspace() {
     runGit(["init"]);
     runGit(["branch", "-M", "main"]);
     const topLevel = runGit(["rev-parse", "--show-toplevel"], { quiet: true });
-    if (resolve(topLevel).toLowerCase() !== resolve(workspaceRoot).toLowerCase()) {
+    if (canonicalPath(topLevel) !== canonicalPath(workspaceRoot)) {
       throw new Error(`Git initialized an unexpected repository root: ${topLevel}`);
     }
     const hasName = runGit(["config", "user.name"], { quiet: true, allowFailure: true });
@@ -183,7 +202,7 @@ function scaffoldWorkspace() {
     runGit(["commit", "-m", "Initialize agentic-loop-playground workspace"]);
   } else {
     const topLevel = runGit(["rev-parse", "--show-toplevel"], { quiet: true });
-    if (resolve(topLevel).toLowerCase() !== resolve(workspaceRoot).toLowerCase()) {
+    if (canonicalPath(topLevel) !== canonicalPath(workspaceRoot)) {
       throw new Error(`Workspace Git root does not match the workspace directory: ${topLevel}`);
     }
   }

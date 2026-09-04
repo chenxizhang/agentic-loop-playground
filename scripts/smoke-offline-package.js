@@ -42,13 +42,10 @@ try {
     "http://127.0.0.1:9",
     packagePath
   ];
-  execFileSync(
-    process.platform === "win32" ? process.env.ComSpec : "npm",
-    process.platform === "win32"
-      ? ["/d", "/s", "/c", "npm.cmd", ...npmArguments]
-      : npmArguments,
-    { stdio: "inherit" }
-  );
+  if (!process.env.npm_execpath) {
+    throw new Error("npm_execpath is unavailable; run this command through npm.");
+  }
+  execFileSync(process.execPath, [process.env.npm_execpath, ...npmArguments], { stdio: "inherit" });
   const packageRoot = join(installDirectory, "node_modules", packageJson.name);
   const githubModules = join(packageRoot, "node_modules", "@github");
   const runtimePrefix = `copilot-${process.platform === "win32" ? "win32" : process.platform}`;

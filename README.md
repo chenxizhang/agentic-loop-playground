@@ -10,7 +10,7 @@ After the package is published, start it from any directory:
 npx -y agentic-loop-playground
 ```
 
-Without a path, the command creates an isolated `agentic-loop-playground` repository under the current directory. Pass one positional path to choose an empty directory or an existing playground:
+Without a path, the command creates an isolated `agentic-loop-playground` repository under the current directory. If that name is already occupied by a non-playground directory, it safely falls back to `agentic-loop-playground-workspace`. Pass one positional path to choose an empty directory or an existing playground:
 
 ```shell
 npx -y agentic-loop-playground .

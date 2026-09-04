@@ -8,19 +8,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-publish-${{ github.sha }}
+  group: npm-publish-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  publish:
+  prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    environment: prod
     permissions:
       contents: read
-      id-token: write
     outputs:
-      version: ${{ steps.publish.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
+      status: ${{ steps.version.outputs.status }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -34,62 +34,43 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Use an OIDC-capable npm CLI
-        run: npm install --global npm@11.19.1
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Publish to npm
-        id: publish
+      - name: Validate the package
+        run: npm run validate
+
+      - name: Determine the release version
+        id: version
         shell: bash
         run: |
           package_name="$(node --print "require('./package.json').name")"
           merge_sha="$(git rev-parse HEAD)"
-          attempt=0
-
-          while true; do
-            attempt=$((attempt + 1))
-            release_state="$(node --input-type=module -e '
-              const [packageName, mergeSha] = process.argv.slice(1);
-              const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`);
-              if (!response.ok) throw new Error(`npm registry returned ${response.status}`);
-              const metadata = await response.json();
-              const existing = Object.entries(metadata.versions)
-                .find(([, manifest]) => manifest.gitHead === mergeSha)?.[0] ?? "";
-              const latest = metadata["dist-tags"]?.latest;
-              const match = latest?.match(/^(\d+)\.(\d+)\.(\d+)$/);
-              if (!match) throw new Error(`Unsupported latest version: ${latest}`);
-              const next = `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
-              console.log(JSON.stringify({ existing, next }));
-            ' "$package_name" "$merge_sha")"
-
-            existing_version="$(node -p "JSON.parse(process.argv[1]).existing" "$release_state")"
-            if [ -n "$existing_version" ]; then
-              echo "version=$existing_version" >> "$GITHUB_OUTPUT"
-              echo "status=already-published" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
+          release_state="$(node --input-type=module -e '
+            const [packageName, mergeSha] = process.argv.slice(1);
+            const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`);
+            if (!response.ok) throw new Error(`npm registry returned ${response.status}`);
+            const metadata = await response.json();
+            const existing = Object.entries(metadata.versions)
+              .find(([, manifest]) => manifest.gitHead === mergeSha)?.[0] ?? "";
+            const latest = metadata["dist-tags"]?.latest;
+            const match = latest?.match(/^(\d+)\.(\d+)\.(\d+)$/);
+            if (!match) throw new Error(`Unsupported latest version: ${latest}`);
+            const next = `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+            console.log(JSON.stringify({ existing, next }));
+          ' "$package_name" "$merge_sha")"
+          existing_version="$(node -p "JSON.parse(process.argv[1]).existing" "$release_state")"
+          if [ -n "$existing_version" ]; then
+            echo "version=$existing_version" >> "$GITHUB_OUTPUT"
+            echo "status=already-published" >> "$GITHUB_OUTPUT"
+          else
             next_version="$(node -p "JSON.parse(process.argv[1]).next" "$release_state")"
-            npm version "$next_version" --no-git-tag-version --allow-same-version
-            publish_log="$RUNNER_TEMP/npm-publish-$attempt.log"
-            if npm publish --access public 2>&1 | tee "$publish_log"; then
-              echo "version=$next_version" >> "$GITHUB_OUTPUT"
-              echo "status=published" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if ! grep -Eqi "previously published|cannot publish over|EPUBLISHCONFLICT" "$publish_log"; then
-              exit 1
-            fi
-            sleep 15
-          done
-
-      - name: Summarize the release
-        run: echo "${{ steps.publish.outputs.status }} agentic-loop-playground@${{ steps.publish.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "version=$next_version" >> "$GITHUB_OUTPUT"
+            echo "status=pending" >> "$GITHUB_OUTPUT"
+          fi
 
   package-offline:
-    needs: publish
+    needs: prepare
     permissions:
       contents: read
     strategy:
@@ -112,10 +93,10 @@ jobs:
         run: npm ci
 
       - name: Build and verify the offline package
-        run: npm run smoke:offline-package -- --version ${{ needs.publish.outputs.version }}
+        run: npm run smoke:offline-package -- --version ${{ needs.prepare.outputs.version }}
 
       - name: Create the release asset
-        run: npm run pack:offline -- --version ${{ needs.publish.outputs.version }} --output release
+        run: npm run pack:offline -- --version ${{ needs.prepare.outputs.version }} --output release
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -123,8 +104,113 @@ jobs:
           path: release/*.tgz
           if-no-files-found: error
 
+  publish:
+    needs: [prepare, package-offline]
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: needs.prepare.outputs.status == 'pending'
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: needs.prepare.outputs.status == 'pending'
+        with:
+          node-version: 22.14.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Use an OIDC-capable npm CLI
+        if: needs.prepare.outputs.status == 'pending'
+        run: npm install --global npm@11.19.1
+
+      - name: Install dependencies
+        if: needs.prepare.outputs.status == 'pending'
+        run: npm ci
+
+      - name: Publish to npm
+        if: needs.prepare.outputs.status == 'pending'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          package_name="$(node --print "require('./package.json').name")"
+          expected_sha="$GITHUB_SHA"
+
+          registry_state() {
+            node --input-type=module -e '
+              const [packageName, version, expectedSha] = process.argv.slice(1);
+              const response = await fetch(
+                `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`
+              );
+              if (response.status === 404) {
+                console.log("missing");
+                process.exit(0);
+              }
+              if (!response.ok) throw new Error(`npm registry returned ${response.status}`);
+              const manifest = await response.json();
+              console.log(manifest.gitHead === expectedSha ? "match" : "mismatch");
+            ' "$package_name" "$VERSION" "$expected_sha"
+          }
+
+          state="$(registry_state)"
+          if [ "$state" = "match" ]; then
+            echo "$package_name@$VERSION is already published from $expected_sha"
+            exit 0
+          fi
+          if [ "$state" = "mismatch" ]; then
+            echo "::error::$package_name@$VERSION already belongs to a different commit"
+            exit 1
+          fi
+
+          npm version "$VERSION" --no-git-tag-version
+          if npm publish --access public; then
+            exit 0
+          fi
+
+          for attempt in $(seq 1 12); do
+            state="$(registry_state)"
+            if [ "$state" = "match" ]; then
+              echo "$package_name@$VERSION was published before the client lost confirmation"
+              exit 0
+            fi
+            if [ "$state" = "mismatch" ]; then
+              echo "::error::$package_name@$VERSION was published from a different commit"
+              exit 1
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Summarize the release
+        run: echo "${{ needs.prepare.outputs.status }} agentic-loop-playground@${{ needs.prepare.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+
+  verify-published:
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.14.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Download, install, and launch the published package
+        run: npm run smoke:published-package -- --version ${{ needs.prepare.outputs.version }}
+
   release:
-    needs: [publish, package-offline]
+    needs: [prepare, package-offline, publish, verify-published]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -138,7 +224,7 @@ jobs:
       - name: Create or update the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.publish.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           tag="v${VERSION}"
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

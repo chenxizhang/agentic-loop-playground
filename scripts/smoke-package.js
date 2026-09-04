@@ -4,9 +4,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const temporaryRoot = mkdtempSync(join(tmpdir(), "agentic-loop-playground-package-"));
-const workspace = join(temporaryRoot, "workspace");
+const occupiedDefault = join(temporaryRoot, "agentic-loop-playground");
+const workspace = join(temporaryRoot, "agentic-loop-playground-workspace");
 const launcher = process.argv[2] ? resolve(process.argv[2]) : resolve("dist/launcher.js");
-const child = spawn(process.execPath, [launcher, workspace, "--no-open"], {
+mkdirSync(occupiedDefault);
+writeFileSync(join(occupiedDefault, "existing.txt"), "do not overwrite");
+const child = spawn(process.execPath, [launcher, "--no-open"], {
+  cwd: temporaryRoot,
   env: { ...process.env, PORT: "0" },
   stdio: ["ignore", "pipe", "pipe"]
 });
@@ -63,9 +67,10 @@ try {
   }
   if (
     !existsSync(join(workspace, ".loop-playground.json")) ||
-    !existsSync(join(workspace, "practice/src/inventory.js"))
+    !existsSync(join(workspace, "practice/src/inventory.js")) ||
+    !existsSync(join(occupiedDefault, "existing.txt"))
   ) {
-    throw new Error("Packaged template archive was not expanded into the learner workspace.");
+    throw new Error("Packaged launcher did not safely select and populate its fallback workspace.");
   }
 
   const unsafeWorkspace = join(temporaryRoot, "unsafe-parent-workspace");
