@@ -36,6 +36,10 @@
   "publishConfig": {
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chenxizhang/agentic-loop-playground.git"
+  },
   "license": "MIT",
   "dependencies": {
     "@github/copilot-sdk": "1.0.11"
