@@ -222,6 +222,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: offline-package-*
@@ -241,4 +246,46 @@ jobs:
               --title "$tag" \
               --generate-notes
           fi
-          gh release upload "$tag" release/*.tgz --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$tag" install.sh install.ps1 release/*.tgz --clobber --repo "$GITHUB_REPOSITORY"
+
+  verify-installers:
+    needs: [prepare, release]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.14.0
+          package-manager-cache: false
+
+      - name: Confirm the expected release is latest
+        shell: bash
+        run: |
+          latest_tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          test "$latest_tag" = "v$EXPECTED_VERSION"
+
+      - name: Run the Windows installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          npm_config_prefix: ${{ runner.temp }}\agentic-loop-playground-install
+        run: |
+          Invoke-RestMethod https://github.com/chenxizhang/agentic-loop-playground/releases/latest/download/install.ps1 | Invoke-Expression
+          & "$env:npm_config_prefix\agentic-loop-playground.cmd" -h
+
+      - name: Run the macOS or Linux installer
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          npm_config_prefix: ${{ runner.temp }}/agentic-loop-playground-install
+        run: |
+          curl -fsSL https://github.com/chenxizhang/agentic-loop-playground/releases/latest/download/install.sh | sh
+          "$npm_config_prefix/bin/agentic-loop-playground" -h

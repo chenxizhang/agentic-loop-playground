@@ -33,9 +33,25 @@ The launcher initializes local Git history, starts a loopback-only Node.js serve
 
 Each GitHub Release provides platform-specific, self-contained npm tarballs for Windows x64, Linux x64, and macOS arm64. Download the asset that matches the target computer, transfer it through your approved internal channel if necessary, and install it without registry access:
 
+Windows x64:
+
+```powershell
+irm https://github.com/chenxizhang/agentic-loop-playground/releases/latest/download/install.ps1 | iex
+```
+
+Linux x64 or macOS arm64:
+
+```shell
+curl -fsSL https://github.com/chenxizhang/agentic-loop-playground/releases/latest/download/install.sh | sh
+```
+
+The bootstrap scripts are published as validated Release assets rather than executed from a mutable branch. They require `npm`, an authenticated GitHub CLI (`gh auth login`), and access to GitHub Releases. They dynamically download the latest matching tarball, install it with npm's offline mode, remove temporary files, and then prompt you to run `agentic-loop-playground -h`.
+
+For a tarball that was transferred manually:
+
 ```powershell
 npm install --global --offline .\agentic-loop-playground-<version>-win32-x64.tgz
-agentic-loop-playground
+agentic-loop-playground -h
 ```
 
 Linux and macOS assets use the same naming pattern with `linux-x64` or `darwin-arm64`. The tarball bundles the Copilot SDK, Copilot runtime, and platform-specific native dependencies, so npm does not need to resolve packages from the public registry during installation. Other architectures require an asset built on that architecture or an approved internal npm proxy.
