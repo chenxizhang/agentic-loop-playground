@@ -7,6 +7,7 @@ const expectedFiles = ["dist", "README.md"];
 const artifacts = [
   "dist/launcher.js",
   "dist/analyze-repo-worker.js",
+  "dist/validate-worker.js",
   "dist/public/app.js",
   "dist/public/styles.css"
 ];

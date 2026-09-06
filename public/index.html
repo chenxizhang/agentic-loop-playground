@@ -80,6 +80,9 @@
         <div id="copilot-permissions" class="copilot-permissions"></div>
 
         <form id="copilot-form" class="copilot-composer">
+          <div id="copilot-commands" class="command-palette" aria-label="Chat commands" hidden></div>
+          <button id="copilot-new-content" class="copy-button" type="button" hidden>Jump to new content</button>
+          <label class="visually-hidden" for="copilot-input">Message for the current lab</label>
           <textarea id="copilot-input" rows="3" placeholder="Tell Copilot what to do. Enter to send, Shift+Enter for a new line."></textarea>
           <div class="copilot-composer-footer">
             <span id="copilot-tool-status">Workspace agent</span>

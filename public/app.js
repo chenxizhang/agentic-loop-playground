@@ -1,3 +1,6 @@
+import { createChatLedger, createPaintQueue, toolDetailPreview } from "./chat-state.js";
+import { attachCommandCompletion } from "./chat-completion.js";
+
 const state = {
   lessons: [],
   progress: { completed: {}, attempts: {} },
@@ -29,7 +32,20 @@ const copilotForm = document.querySelector("#copilot-form");
 const copilotInput = document.querySelector("#copilot-input");
 const copilotSend = document.querySelector("#copilot-send");
 const copilotConnect = document.querySelector("#copilot-connect");
-let streamingAssistant = null;
+const chatLedger = createChatLedger();
+const messageElements = new Map();
+const toolElements = new Map();
+let followChat = true;
+let chatBusy = false;
+let sending = false;
+let awaitingTerminal = false;
+let pendingOperationId = null;
+const terminalOperations = new Set();
+let recovering = null;
+let commandRegistry = { commands: [], skills: [], agents: [] };
+const newContentButton = document.querySelector("#copilot-new-content");
+const paintQueue = createPaintQueue(paintChat);
+const commandPalette = attachCommandCompletion(copilotInput, document.querySelector("#copilot-commands"), () => commandRegistry);
 
 async function request(path, options) {
   const requestOptions = { ...options };
@@ -176,11 +192,17 @@ function showResults(title, checks, prefix = "") {
 }
 
 function scrollChat() {
-  copilotMessages.scrollTop = copilotMessages.scrollHeight;
+  if (followChat) {
+    copilotMessages.scrollTop = copilotMessages.scrollHeight;
+    newContentButton.hidden = true;
+  } else {
+    newContentButton.hidden = false;
+  }
 }
 
 function removeWelcome() {
-  copilotMessages.querySelector(".copilot-welcome")?.remove();
+  const welcome = copilotMessages.querySelector(".copilot-welcome");
+  if (welcome) welcome.hidden = true;
 }
 
 function appendInlineMarkdown(parent, text) {
@@ -268,6 +290,8 @@ function renderMarkdown(target, markdown) {
       }
       if (index < lines.length) index += 1;
       const pre = document.createElement("pre");
+      pre.tabIndex = 0;
+      pre.setAttribute("aria-label", "Code block");
       const code = document.createElement("code");
       if (fence[1]) code.dataset.language = fence[1];
       code.textContent = codeLines.join("\n");
@@ -310,7 +334,13 @@ function renderMarkdown(target, markdown) {
         index += 1;
       }
       table.append(body);
-      fragment.append(table);
+      const scroller = document.createElement("div");
+      scroller.className = "chat-table-scroll";
+      scroller.tabIndex = 0;
+      scroller.setAttribute("role", "region");
+      scroller.setAttribute("aria-label", "Message table");
+      scroller.append(table);
+      fragment.append(scroller);
       continue;
     }
 
@@ -367,7 +397,8 @@ function renderMarkdown(target, markdown) {
   target.replaceChildren(fragment);
 }
 
-function addChatMessage(role, content = "") {
+function addChatMessage(role, content, id) {
+  if (!content.trim()) return null;
   removeWelcome();
   const wrapper = document.createElement("div");
   wrapper.className = `chat-message ${role}`;
@@ -376,16 +407,93 @@ function addChatMessage(role, content = "") {
   label.textContent = role === "user" ? "You" : "Copilot";
   const body = document.createElement("div");
   body.className = "chat-message-content";
-  if (role === "assistant") {
-    body.dataset.markdown = content;
-    renderMarkdown(body, content);
-  } else {
-    body.textContent = content;
-  }
+  body.textContent = content;
+  if (id) wrapper.dataset.messageId = id;
   wrapper.append(label, body);
   copilotMessages.append(wrapper);
-  scrollChat();
   return body;
+}
+
+function paintChat(keys) {
+  for (const key of keys) {
+    if (key.startsWith("tool:")) {
+      paintTool(key.slice(5));
+      continue;
+    }
+    const record = chatLedger.messages.get(key);
+    if (!record) continue;
+    let element = messageElements.get(key);
+    if (!record.content.trim()) {
+      element?.body.parentElement.remove();
+      messageElements.delete(key);
+      continue;
+    }
+    if (!element) {
+      element = { body: addChatMessage(record.role, record.content, key), content: "", complete: false };
+      messageElements.set(key, element);
+    }
+    if (element.content === record.content && element.complete === record.complete) continue;
+    const { body } = element;
+    const format = record.role === "assistant" && record.complete && record.content.length <= 65536;
+    body.classList.toggle("is-streaming", !format);
+    if (format) {
+      renderMarkdown(body, record.content);
+    } else if (!element.complete && body.firstChild?.nodeType === Node.TEXT_NODE && record.content.startsWith(element.content)) {
+      if (element.content) body.firstChild.appendData(record.content.slice(element.content.length));
+    } else {
+      body.textContent = record.content;
+    }
+    element.content = record.content;
+    element.complete = record.complete;
+  }
+  scrollChat();
+  document.dispatchEvent(new CustomEvent("loop:chat-paint", { detail: { count: keys.length } }));
+}
+
+function detailText(value) {
+  return toolDetailPreview(value);
+}
+
+function paintTool(id) {
+  const tool = chatLedger.tools.get(id);
+  if (!tool) return;
+  removeWelcome();
+  let card = toolElements.get(id);
+  if (!card) {
+    card = document.createElement("details");
+    card.className = "chat-tool";
+    card.dataset.toolCallId = id;
+    card.append(document.createElement("summary"), document.createElement("div"));
+    toolElements.set(id, card);
+    copilotMessages.append(card);
+  }
+  card.dataset.state = tool.state;
+  card.firstChild.textContent = `${tool.toolName || "Recovered tool"} · ${tool.state}`;
+  const detail = card.lastChild;
+  detail.replaceChildren();
+  for (const [label, value] of [["Call", id], ["Arguments", tool.arguments], ["Result", tool.result], ["Error", tool.error]]) {
+    if (value === undefined || value === null) continue;
+    const heading = document.createElement("strong");
+    heading.textContent = label;
+    const pre = document.createElement("pre");
+    pre.textContent = detailText(value);
+    pre.tabIndex = 0;
+    detail.append(heading, pre);
+  }
+  const running = [...chatLedger.tools.values()].filter((entry) => entry.state === "running").length;
+  copilotToolStatus.textContent = running ? `${running} tool${running === 1 ? "" : "s"} running` : chatBusy ? "Thinking..." : "Workspace agent";
+}
+
+function restoreChat(snapshot) {
+  paintQueue.cancel();
+  copilotMessages.querySelectorAll(".chat-message, .chat-tool, .chat-activity").forEach((element) => element.remove());
+  messageElements.clear();
+  toolElements.clear();
+  copilotPermissions.replaceChildren();
+  for (const id of chatLedger.messages.keys()) paintQueue.add(id);
+  for (const id of chatLedger.tools.keys()) paintQueue.add(`tool:${id}`);
+  for (const permission of snapshot.permissions ?? []) renderPermission(permission);
+  if (snapshot.status) setCopilotStatus(snapshot.status);
 }
 
 function addActivity(text, stateName = "") {
@@ -398,6 +506,13 @@ function addActivity(text, stateName = "") {
 }
 
 function setCopilotStatus(status) {
+  if (status.busy === false && status.operationId) {
+    terminalOperations.add(status.operationId);
+    if (terminalOperations.size > 32) terminalOperations.delete(terminalOperations.values().next().value);
+    if (pendingOperationId === status.operationId) awaitingTerminal = false;
+  }
+  chatBusy = Boolean(status.busy) || ["sending", "running", "awaiting-permission", "cancelling"].includes(status.state);
+  copilotSend.disabled = chatBusy || sending || awaitingTerminal;
   copilotStatus.className = "copilot-status";
   if (status.state === "ready") {
     copilotStatus.classList.add("ready");
@@ -405,16 +520,20 @@ function setCopilotStatus(status) {
   } else if (status.state === "connecting") {
     copilotStatus.classList.add("working");
     copilotStatus.lastChild.textContent = " Connecting";
-  } else if (status.state === "error") {
+  } else if (status.state === "error" || status.state === "unavailable") {
     copilotStatus.classList.add("error");
-    copilotStatus.lastChild.textContent = " Connection failed";
-    addActivity(status.error || "Copilot connection failed", "failure");
+    copilotStatus.lastChild.textContent = status.state === "unavailable" ? " SDK unavailable" : " Connection failed";
+    copilotToolStatus.textContent = status.error || "Copilot connection failed";
+  } else if (chatBusy) {
+    copilotStatus.classList.add("working");
+    copilotStatus.lastChild.textContent = " Working";
   } else {
     copilotStatus.lastChild.textContent = " Disconnected";
   }
 }
 
 function renderPermission(data) {
+  if (copilotPermissions.querySelector(`[data-permission-id="${CSS.escape(data.requestId)}"]`)) return;
   const card = document.createElement("div");
   card.className = "permission-card";
   card.dataset.permissionId = data.requestId;
@@ -424,7 +543,7 @@ function renderPermission(data) {
     <p>${escapeHtml(request.intention || "")}</p>
     ${request.warning ? `<p class="permission-warning">${escapeHtml(request.warning)}</p>` : ""}
     ${data.sandboxBypass ? '<p class="permission-warning">This operation requests a sandbox bypass.</p>' : ""}
-    <div class="permission-detail">${escapeHtml(request.diff || request.detail || JSON.stringify(request.arguments ?? {}, null, 2))}</div>
+    ${[request.detail, request.diff, request.arguments].filter((value) => value !== undefined && value !== "").map((value) => `<div class="permission-detail">${escapeHtml(detailText(value))}</div>`).join("")}
     <div class="permission-actions">
       <button class="permission-reject" data-permission-decision="reject">Reject</button>
       <button class="permission-approve" data-permission-decision="approve">Allow Once</button>
@@ -436,6 +555,7 @@ function renderPermission(data) {
 function connectCopilotEvents() {
   const events = new EventSource("/api/copilot/events");
   const eventTypes = [
+    "chat.snapshot",
     "chat.status",
     "user.message",
     "assistant.delta",
@@ -450,43 +570,42 @@ function connectCopilotEvents() {
   ];
   for (const type of eventTypes) {
     events.addEventListener(type, (event) => {
-      const payload = JSON.parse(event.data);
+      let payload;
+      let change;
+      try {
+        payload = JSON.parse(event.data);
+        if (payload.type !== type || !payload.data || typeof payload.data !== "object") throw new Error("Invalid chat event");
+        change = chatLedger.apply(payload);
+      } catch (error) {
+        copilotToolStatus.textContent = `Recovering chat: ${error.message}`;
+        recovering ??= request("/api/copilot/snapshot").then((snapshot) => {
+          if (chatLedger.apply({ type: "chat.snapshot", data: snapshot })) restoreChat(snapshot);
+        }).catch((failure) => { copilotToolStatus.textContent = failure.message; }).finally(() => { recovering = null; });
+        return;
+      }
+      if (!change) return;
       const data = payload.data ?? {};
+      if (change.snapshot) restoreChat(data);
+      if (change.message) paintQueue.add(change.message);
+      if (change.tool) paintQueue.add(`tool:${change.tool}`);
       if (type === "chat.status") setCopilotStatus(data);
-      if (type === "user.message") addChatMessage("user", data.content);
-      if (type === "assistant.delta") {
-        if (!streamingAssistant) streamingAssistant = addChatMessage("assistant");
-        streamingAssistant.dataset.markdown += data.content;
-        renderMarkdown(streamingAssistant, streamingAssistant.dataset.markdown);
-        scrollChat();
-      }
-      if (type === "assistant.message") {
-        if (streamingAssistant) {
-          streamingAssistant.dataset.markdown = data.content;
-          renderMarkdown(streamingAssistant, data.content);
-          streamingAssistant = null;
-        } else {
-          addChatMessage("assistant", data.content);
-        }
-      }
-      if (type === "tool.started") {
-        copilotToolStatus.textContent = `Running ${data.toolName || "tool"}`;
-        addActivity(`Tool started: ${data.toolName || "unknown"}`);
-      }
-      if (type === "tool.completed") {
-        copilotToolStatus.textContent = "Workspace agent";
-        addActivity(`Tool ${data.success === false ? "failed" : "completed"}: ${data.toolName || "unknown"}`, data.success === false ? "failure" : "success");
-      }
       if (type === "session.idle") {
+        awaitingTerminal = false;
         copilotToolStatus.textContent = "Workspace agent";
+        chatBusy = false;
         copilotSend.disabled = false;
       }
-      if (type === "chat.error") addActivity(data.message, "failure");
+      if (type === "chat.error") {
+        awaitingTerminal = false;
+        chatBusy = false;
+        copilotSend.disabled = false;
+        addActivity(data.message, "failure");
+      }
       if (type === "chat.reset") {
-        streamingAssistant = null;
-        copilotMessages.innerHTML = "";
-        copilotPermissions.innerHTML = "";
+        awaitingTerminal = false;
+        pendingOperationId = null;
         copilotToolStatus.textContent = "Workspace agent";
+        chatBusy = false;
         copilotSend.disabled = false;
         addActivity("New Copilot session");
       }
@@ -499,6 +618,7 @@ function connectCopilotEvents() {
   events.onerror = () => {
     copilotToolStatus.textContent = "Reconnecting…";
   };
+  events.onopen = () => { copilotToolStatus.textContent = chatBusy ? "Working..." : "Workspace agent"; };
 }
 
 async function startCopilot() {
@@ -514,19 +634,34 @@ async function startCopilot() {
 }
 
 async function sendToCopilot(prompt) {
-  if (!prompt.trim()) return;
+  if (!prompt.trim()) {
+    showToast("Enter a message first.");
+    return false;
+  }
+  if (sending || chatBusy || awaitingTerminal) {
+    showToast("Wait for the current operation or stop it first.");
+    return false;
+  }
+  sending = true;
   copilotSend.disabled = true;
   copilotToolStatus.textContent = "Thinking…";
   try {
-    await request("/api/copilot/message", {
+    const accepted = await request("/api/copilot/message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt })
     });
+    pendingOperationId = accepted.operationId;
+    awaitingTerminal = !terminalOperations.has(accepted.operationId);
+    return true;
   } catch (error) {
     copilotSend.disabled = false;
     copilotToolStatus.textContent = "Workspace agent";
     addActivity(error.message, "failure");
+    return false;
+  } finally {
+    sending = false;
+    copilotSend.disabled = chatBusy || awaitingTerminal;
   }
 }
 
@@ -577,20 +712,35 @@ copilotConnect.addEventListener("click", startCopilot);
 copilotForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const prompt = copilotInput.value;
-  copilotInput.value = "";
-  await sendToCopilot(prompt);
+  if (await sendToCopilot(prompt) && copilotInput.value === prompt) copilotInput.value = "";
 });
 copilotInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault();
     copilotForm.requestSubmit();
   }
 });
 document.querySelector("#copilot-abort").addEventListener("click", async () => {
-  await request("/api/copilot/abort", { method: "POST" });
+  try {
+    await request("/api/copilot/abort", { method: "POST" });
+  } catch (error) {
+    addActivity(error.message, "failure");
+  }
 });
 document.querySelector("#copilot-reset").addEventListener("click", async () => {
-  await request("/api/copilot/reset", { method: "POST" });
+  try {
+    await request("/api/copilot/reset", { method: "POST" });
+  } catch (error) {
+    addActivity(error.message, "failure");
+  }
+});
+copilotMessages.addEventListener("scroll", () => {
+  followChat = copilotMessages.scrollHeight - copilotMessages.clientHeight - copilotMessages.scrollTop <= 48;
+  if (followChat) newContentButton.hidden = true;
+}, { passive: true });
+newContentButton.addEventListener("click", () => {
+  followChat = true;
+  scrollChat();
 });
 copilotPermissions.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-permission-decision]");
@@ -608,6 +758,7 @@ copilotPermissions.addEventListener("click", async (event) => {
     });
   } catch (error) {
     addActivity(error.message, "failure");
+    button.disabled = false;
   }
 });
 

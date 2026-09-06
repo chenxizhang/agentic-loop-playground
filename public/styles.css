@@ -38,8 +38,33 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 290px minmax(520px, 1fr) 410px;
+  grid-template-columns: 260px minmax(0, 1fr) minmax(360px, 410px);
   min-height: 100vh;
+}
+
+.app-shell > *,
+.content-grid > *,
+.step-list li > *,
+.evidence-list li > *,
+.copilot-header > *,
+.check-result > * {
+  min-width: 0;
+}
+
+body {
+  overflow-wrap: anywhere;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+[hidden] {
+  display: none !important;
 }
 
 .sidebar {
@@ -243,7 +268,7 @@ button {
 
 .main {
   min-width: 0;
-  padding: 46px clamp(28px, 6vw, 88px) 80px;
+  padding: 46px clamp(24px, 3vw, 56px) 80px;
 }
 
 .copilot-pane {
@@ -252,6 +277,7 @@ button {
   display: grid;
   height: 100vh;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr);
   border-left: 1px solid var(--border-soft);
   background: #091512;
 }
@@ -263,6 +289,7 @@ button {
   align-items: center;
   padding: 20px;
   border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
 }
 
 .copilot-header h2 {
@@ -353,6 +380,8 @@ button {
 .copilot-messages {
   overflow-y: auto;
   padding: 20px;
+  overflow-anchor: none;
+  min-height: 0;
 }
 
 .copilot-welcome {
@@ -400,6 +429,51 @@ button {
   font-size: 12px;
   line-height: 1.65;
   word-break: break-word;
+  min-width: 0;
+}
+
+.chat-message-content.is-streaming {
+  white-space: pre-wrap;
+}
+
+.chat-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-tool {
+  min-width: 0;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-tool summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.chat-tool[data-state="failed"] {
+  border-color: var(--red);
+}
+
+.chat-tool strong {
+  display: block;
+  margin-top: 10px;
+}
+
+.chat-tool pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#copilot-new-content {
+  margin: 8px 10px 0;
 }
 
 .chat-message-content > :first-child {
@@ -604,10 +678,46 @@ button {
 }
 
 .copilot-composer {
+  position: relative;
+  min-width: 0;
   margin: 12px;
   border: 1px solid var(--border);
   border-radius: 13px;
   background: #0d1b17;
+}
+
+.command-palette {
+  position: absolute;
+  z-index: 5;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.command-palette [role="option"] {
+  padding: 10px;
+  cursor: pointer;
+}
+
+.command-palette [aria-selected="true"] {
+  background: var(--surface-soft);
+}
+
+.command-palette strong,
+.command-palette span {
+  display: block;
+  font-size: 11px;
+}
+
+.command-palette span {
+  margin-top: 4px;
+  color: var(--muted);
 }
 
 .copilot-composer:focus-within {
@@ -635,6 +745,11 @@ button {
   justify-content: space-between;
   align-items: center;
   padding: 7px 9px;
+  gap: 10px;
+}
+
+.copilot-composer-footer > div {
+  flex: 0 0 auto;
 }
 
 .copilot-composer-footer > span {
@@ -785,7 +900,7 @@ button {
 
 .content-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   margin-top: 20px;
 }
@@ -855,6 +970,8 @@ code {
   align-items: center;
   padding: 15px 18px;
   border-bottom: 1px solid #28483d;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .prompt-header span {
@@ -980,6 +1097,7 @@ code {
   pointer-events: none;
   transform: translateY(10px);
   transition: 180ms ease;
+  max-width: calc(100vw - 48px);
 }
 
 .toast.show {
@@ -1286,9 +1404,9 @@ dialog::backdrop {
   letter-spacing: -0.04em;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1220px) {
   .app-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar,
@@ -1302,6 +1420,8 @@ dialog::backdrop {
   .copilot-pane {
     min-height: 720px;
     border-left: 0;
+    height: 800px;
+    max-height: 100dvh;
   }
 
   #lesson-nav {
@@ -1347,5 +1467,11 @@ dialog::backdrop {
   .repository-input-row,
   .prerequisite-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1800px) {
+  .content-grid {
+    grid-template-columns: minmax(0, 1.5fr) minmax(240px, 0.8fr);
   }
 }
