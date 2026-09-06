@@ -40,6 +40,14 @@ npm test
 npm run test:browser
 ```
 
+`npm test` runs `node scripts\test-platform.js`, which auto-discovers every root
+`test\*.test.js` platform test using Node's existing test runner. Browser files,
+helpers, fixtures, and the intentionally failing `practice` scenario are not
+accidentally discovered by that command.
+`npm run test:e2e` selects the service/coordinator/HTTP boundary checks.
+`npm run test:browser` runs the renderer and lab-lifecycle browser files sequentially,
+so another browser workload cannot contaminate the timing measurements.
+
 Without `LOOP_TEST_PLAYWRIGHT_MODULE`, normal Node resolution must find an existing
 `playwright` installation. Without `LOOP_TEST_BROWSER`, Playwright must already have
 its matching browser. Missing prerequisites fail the command; they are not skipped
@@ -63,6 +71,9 @@ test data are needed for fixture runs. The browser UI itself is anonymous.
 For the fault-proxy lane:
 
 ```powershell
+$env:LOOP_TEST_PLAYWRIGHT_MODULE = 'C:\approved\playwright\index.mjs'
+$env:LOOP_TEST_BROWSER = 'C:\approved\chromium\chrome.exe'
+$env:LOOP_TEST_ARTIFACTS = 'C:\local-evidence\loop-browser-fault-proxy'
 $env:LOOP_TEST_PROFILE = 'fault-proxy'
 npm run test:browser
 Remove-Item Env:LOOP_TEST_PROFILE
@@ -72,6 +83,23 @@ The loopback proxy rewrites upstream Host and Origin together so its different
 test port does not bypass or accidentally fail the application's same-origin
 mutation protection. This is test-only routing, not production forwarded-origin
 configuration.
+
+For the live native SDK smoke:
+
+```powershell
+$env:LOOP_TEST_PLAYWRIGHT_MODULE = 'C:\approved\playwright\index.mjs'
+$env:LOOP_TEST_BROWSER = 'C:\approved\chromium\chrome.exe'
+$env:LOOP_TEST_ARTIFACTS = 'C:\local-evidence\loop-live-smoke'
+node scripts\smoke-live-chat.js --allow-live
+```
+
+The `--allow-live` flag is required because this lane uses the existing Copilot
+authentication and requests at most three SDK turns. It exercises the actual
+native SDK session history API (`session.getEvents()`), verifies native history
+continuity across A-B-A navigation and process restart with a unique marker, and
+requires a positive application plus native deletion receipt. The smoke must not
+auto-approve protected operations; read-only fixture tool use may proceed only
+when it stays inside the isolated workspace.
 
 ## Regression oracles
 
@@ -96,6 +124,17 @@ the shipping application.
 - Readers who scroll up retain their position; following the bottom is opt-in
   again through the new-content button. Reload uses authoritative server state
   rather than inventing or automatically resending user operations.
+- The browser fixture has direct and `fault-proxy` profiles. Together they cover
+  fragmented and buffered transport, disconnect recovery, a missed terminal event,
+  draft retention after unconfirmed delivery, exact retry idempotency, and no
+  duplicate or empty messages after reload.
+- The lab lifecycle browser fixture covers passive lab navigation, explicit
+  connect, 13 viewport widths, command completion with Arrow/Enter/Escape/IME,
+  project skill dispatch, selected native agent state, A-B-A plus draft history,
+  canonical `/check` context, lost POST reply idempotency, New/Clear, stale route
+  409 responses, two-tab takeover and stale permissions, process restart, more
+  than 256KiB of history reload, and Forget deleting the selected application and
+  native fixture session without deleting other lab history or progress.
 
 Thresholds are fixed before a correction cycle. Functional failures are never
 averaged away. Keep raw per-run results, not only a single aggregate or screenshot.
@@ -130,5 +169,7 @@ versions or removing the gate.
 
 An actual SSH run requires an authorized host, tunnel configuration, and matching
 before/after workload. Never disable host-key checking, alter a shared tunnel,
-or claim a proxy run reproduced the original SSH freeze. Record an unreproduced
-incident or unavailable tunnel honestly and leave that acceptance lane open.
+or claim a proxy run reproduced the original SSH freeze. The original authorized
+SSH incident remains a manual acceptance residual risk unless a matching SSH
+walkthrough reproduces or disproves it directly; the direct and fault-proxy
+browser fixtures do not close that lane by themselves.

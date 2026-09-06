@@ -16,6 +16,12 @@ export function createChatLedger() {
   return {
     messages,
     tools,
+    reset() {
+      messages.clear();
+      tools.clear();
+      cursor = 0;
+      fallbackMessage = null;
+    },
     apply(event) {
       const data = event.data ?? {};
       if (event.type === "chat.snapshot") {
@@ -126,7 +132,7 @@ export function toolDetailPreview(value, limit = 16384) {
       remaining -= text.length;
       if (text.length < item.length) {
         truncated = true;
-        return `${text} [${item.length} characters total]`;
+        return `[${item.length} characters total] ${text}`;
       }
       return text;
     }
@@ -141,12 +147,45 @@ export function toolDetailPreview(value, limit = 16384) {
         truncated = true;
         break;
       }
-      remaining -= key.length + 4;
-      result[key] = preview(item[key], depth + 1);
+      const boundedKey = key.slice(0, Math.max(0, Math.min(128, remaining - 4)));
+      if (boundedKey.length < key.length) truncated = true;
+      remaining -= boundedKey.length + 4;
+      Object.defineProperty(result, boundedKey, {
+        value: preview(item[key], depth + 1), enumerable: true, configurable: true
+      });
     }
     return result;
   }
   const bounded = preview(value);
   const text = typeof bounded === "string" ? bounded : JSON.stringify(bounded, null, 2);
-  return `${text ?? ""}${truncated ? `\n[Preview truncated to a ${limit}-character budget.]` : ""}`;
+  const content = text ?? "";
+  if (!truncated && content.length <= limit) return content;
+  const notice = "\n[Preview truncated.]";
+  return `${content.slice(0, Math.max(0, limit - notice.length))}${notice}`.slice(0, limit);
+}
+
+export function matchesOperation(target, event) {
+  return Boolean(target && target.operationId === event.operationId &&
+    target.generation === event.generation &&
+    (!target.sessionId || target.sessionId === event.sessionId));
+}
+
+export function createOperationTracker() {
+  let pending = null;
+  const terminals = new Map();
+  const key = (value) => `${value.generation}:${value.operationId}`;
+  return {
+    get pending() { return pending; },
+    get waiting() {
+      return Boolean(pending && !matchesOperation(pending, terminals.get(key(pending)) ?? {}));
+    },
+    accept(target) { pending = target; },
+    observe(event) {
+      if (!event.operationId || !Number.isInteger(event.generation)) return false;
+      terminals.set(key(event), { ...event });
+      if (terminals.size > 32) terminals.delete(terminals.keys().next().value);
+      return matchesOperation(pending, event);
+    },
+    clear() { pending = null; terminals.clear(); }
+  };
 }

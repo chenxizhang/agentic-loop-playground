@@ -2,12 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSseSubscriber, createWorkshopServer } from "../src/server-app.js";
+import { CopilotChatService } from "../src/copilot-chat.js";
 import { startChatTestServer } from "./helpers/chat-test-server.js";
 
 const headers = { "Content-Type": "application/json", "X-Loop-Lab": "browser" };
@@ -61,7 +62,12 @@ async function events(url) {
 
 test("real anonymous server remains live without the default SDK; start/send return 503", { timeout: 15_000 }, async (t) => {
   const workspace = temporaryWorkspace(t);
-  const app = createWorkshopServer({ workspace });
+  const chat = new CopilotChatService(workspace, {
+    sdkLoader() {
+      throw Object.assign(new Error("Cannot find package '@github/copilot-sdk'"), { code: "ERR_MODULE_NOT_FOUND" });
+    }
+  });
+  const app = createWorkshopServer({ workspace, chat });
   const url = await app.listen({ port: 0 });
   try {
     assert.equal((await fetch(`${url}/api/health`)).status, 200);
@@ -302,7 +308,10 @@ test("direct server entrypoint starts offline and preserves occupied-port fallba
     });
     assert.notEqual(url, occupied);
     assert.equal((await fetch(`${url}/api/health`)).status, 200);
-    assert.equal((await (await fetch(`${url}/api/copilot/status`)).json()).code, "SDK_NOT_INSTALLED");
+    const status = await (await fetch(`${url}/api/copilot/status`)).json();
+    assert.equal(status.state, "disconnected");
+    assert.equal(status.protocol, "lab-v1");
+    assert.equal(existsSync(join(workspace, ".workshop", "chat", "native")), false, "startup must not launch a native session");
   } finally {
     const exited = once(child, "exit");
     child.kill();

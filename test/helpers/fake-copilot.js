@@ -16,6 +16,36 @@ export class FakeCopilotSession {
     this.sent = [];
     this.disconnectCalls = 0;
     this.abortCalls = 0;
+    this.selectedAgent = config.agent ?? null;
+    this.rpc = {
+      agent: {
+        list: async () => ({ agents: client.options.agents ?? (config.customAgents ?? []).map((agent) => ({
+          ...agent, id: agent.name, source: "project"
+        })) }),
+        select: async ({ name }) => {
+          await client.options.onSelectAgent?.(this, name);
+          this.selectedAgent = name;
+          return {};
+        },
+        deselect: async () => {
+          await client.options.onSelectAgent?.(this, null);
+          this.selectedAgent = null;
+          return {};
+        },
+        reload: async () => await client.options.onAgentReload?.(this) ?? {}
+      },
+      skills: {
+        list: async () => ({ skills: client.options.skills ?? [] }),
+        ensureLoaded: async () => await client.options.onSkillsLoaded?.(this) ?? {},
+        reload: async () => await client.options.onSkillsReload?.(this) ?? { warnings: [], errors: [] }
+      },
+      commands: {
+        invoke: async (request) => {
+          if (!client.options.onInvokeCommand) throw new Error("No fake native command handler is configured.");
+          return client.options.onInvokeCommand(this, request);
+        }
+      }
+    };
   }
 
   on(listener) {
@@ -55,6 +85,10 @@ export class FakeCopilotClient {
     this.sessions = [];
     this.startCalls = 0;
     this.stopCalls = 0;
+    this.createCalls = 0;
+    this.resumeCalls = [];
+    this.deleteCalls = [];
+    this.savedSessions = options.savedSessions ?? new Map();
   }
 
   get session() {
@@ -71,10 +105,31 @@ export class FakeCopilotClient {
   }
 
   async createSession(config) {
+    this.createCalls += 1;
     const session = new FakeCopilotSession(this, config);
     this.sessions.push(session);
+    this.savedSessions.set(session.sessionId, session);
     await this.options.onCreateSession?.(session);
     return session;
+  }
+
+  async resumeSession(sessionId, config) {
+    this.resumeCalls.push({ sessionId, config });
+    if (!this.savedSessions.has(sessionId)) throw new Error(`Unknown fake native session: ${sessionId}`);
+    const previous = this.savedSessions.get(sessionId);
+    const session = new FakeCopilotSession(this, config);
+    session.sessionId = sessionId;
+    session.sent = [...previous.sent];
+    this.sessions.push(session);
+    this.savedSessions.set(sessionId, session);
+    await this.options.onResumeSession?.(session);
+    return session;
+  }
+
+  async deleteSession(sessionId) {
+    this.deleteCalls.push(sessionId);
+    await this.options.onDeleteSession?.(this, sessionId);
+    this.savedSessions.delete(sessionId);
   }
 
   async stop() {

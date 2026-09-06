@@ -38,7 +38,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) minmax(360px, 410px);
+  grid-template-columns: 290px minmax(0, 1fr) minmax(360px, 410px);
   min-height: 100vh;
 }
 
@@ -348,6 +348,36 @@ body {
   align-items: center;
 }
 
+.lab-chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.lab-chat-controls label {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 110px;
+  min-width: 0;
+}
+
+.lab-chat-controls select {
+  max-width: 100%;
+  min-width: 0;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+}
+
+#copilot-lease {
+  flex-basis: 100%;
+}
+
 .copilot-status {
   display: flex;
   gap: 6px;
@@ -585,6 +615,12 @@ body {
   background: rgba(115, 169, 255, 0.08);
   color: #d4e3ff;
   white-space: pre-wrap;
+}
+
+.chat-message.local .chat-message-content {
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
 }
 
 .chat-activity {

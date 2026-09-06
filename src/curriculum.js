@@ -32,7 +32,7 @@ export const lessons = [
       "Create `.workshop/evidence/lab-01-loop-design.md`.",
       "Define the sections `Goal`, `Observe`, `Act`, `Verify`, `Decide`, and `Stop Condition`.",
       "Give each section at least one repository-specific statement.",
-      "Ask Copilot's rubber duck or plan mode to challenge weak measurements.",
+      "Select `/agent loop-verifier` in the embedded pane and ask it to challenge weak measurements without rewriting your design.",
       "Revise the design until every action has an observable result."
     ],
     prompt: "Inspect `git remote -v` first. If there is no GitHub remote, ask me for the repository name and visibility, then guide me through creating it with `gh repo create --source . --remote origin --push`, requesting approval before running the command. After the remote exists, use @docs/templates/loop-design.md as a rubric and critique my @.workshop/evidence/lab-01-loop-design.md as a closed-loop control system. Identify ambiguous observations, unverifiable actions, and unsafe stop conditions. Do not rewrite the design for me.",
@@ -94,7 +94,7 @@ export const lessons = [
     steps: [
       "Create a branch named `lab/worktree-docs` in a second Git worktree.",
       "Keep the worktree until this lab passes; the platform records this ephemeral evidence in local progress.",
-      "From the embedded Copilot pane run `/fleet`, or explicitly ask separate agents to analyze tests and documentation.",
+      "In the embedded pane, explicitly ask separate agents to analyze tests and documentation. `/fleet` is a CLI-only alternative, not an embedded command.",
       "Require each worker to report owned files, verification, and unresolved risks.",
       "Record substantive `Worker 1`, `Worker 2`, and `Merge and escalation` sections in `.workshop/evidence/lab-04-parallel-plan.md`."
     ],
@@ -157,7 +157,7 @@ export const lessons = [
     scenario: "The team wants a recurring health check, but it must not keep editing forever or consume an unlimited budget.",
     steps: [
       "Create `.workshop/evidence/lab-07-automation.md`.",
-      "In the embedded Copilot pane run `/experimental on`; `/loop` is the experimental alias for `/every`.",
+      "Document the CLI-only `/experimental on` and `/loop` commands; do not run them in the embedded pane or start a schedule.",
       "Include `Trigger`, `Prompt`, `Budget`, `Stop Conditions`, `Escalation`, and `Persistent State`.",
       "Design one in-session `/loop` command and one persistent GitHub Actions schedule.",
       "Use a minimum interval appropriate for a lab; do not leave a noisy schedule running.",

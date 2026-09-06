@@ -4,7 +4,7 @@ import { doctorChecks, passed, validateLesson } from "./validators.js";
 
 try {
   const [kind, id] = process.argv.slice(2);
-  const progress = loadProgress();
+  const progress = loadProgress(process.cwd(), { strict: true });
   function check(lesson) {
     const checks = validateLesson(lesson.id, {
       recordedWorktreeEvidence: Boolean(progress.evidence?.lab04Worktree)

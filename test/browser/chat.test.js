@@ -26,7 +26,7 @@ async function loadBrowser() {
   }
 }
 
-async function emitAnswer(session, prompt) {
+async function emitAnswer(session, prompt, controls) {
   const messageId = `answer-${session.sent.length}`;
   if (prompt === "tool-only") {
     session.emit("assistant.message", { messageId, content: "" });
@@ -34,6 +34,11 @@ async function emitAnswer(session, prompt) {
     session.emit("assistant.message", { messageId: `${messageId}-space`, content: " \n " });
     session.emit("tool.execution_start", { toolCallId: messageId, toolName: "read", arguments: { path: `src/${"long-path-".repeat(450)}.js` } });
     session.emit("tool.execution_complete", { toolCallId: messageId, success: true, result: { content: "Readable result", value: 42 } });
+  } else if (prompt === "recover") {
+    session.emit("assistant.message_delta", { messageId, deltaContent: "A recoverable partial response." });
+    await new Promise((resolve) => { controls.releaseRecovery = resolve; });
+    controls.releaseRecovery = null;
+    session.emit("assistant.message", { messageId, content: output });
   } else if (prompt === "burst" || prompt === "paced") {
     for (let index = 0; index < 4096; index++) {
       if (prompt === "paced" && index % 8 === 0) await wait(30);
@@ -42,6 +47,8 @@ async function emitAnswer(session, prompt) {
     session.emit("assistant.message", { messageId, content: output });
   } else if (prompt === "format") {
     session.emit("assistant.message", { messageId, content: `# Safe formatted output\n\n${"X".repeat(4096)}\n\n\`\`\`text\n${"C".repeat(4096)}\n\`\`\`\n\n| Name | Value |\n| --- | --- |\n| fixture | ${"T".repeat(4096)} |\n\n[Unsafe](javascript:alert(1))` });
+  } else if (prompt === "unicode") {
+    session.emit("assistant.message", { messageId, content: "Unicode: \u4f60\u597d \ud83d\ude80" });
   } else {
     session.emit("assistant.message", { messageId, content: `Guidance for this lab: ${prompt}` });
   }
@@ -57,15 +64,16 @@ test("actual application browser regression harness", { timeout: 300_000 }, asyn
   writeFileSync(join(workspace, ".gitignore"), ".workshop/chat/\n.workshop/progress.json\n");
   execFileSync("git", ["-c", "init.defaultBranch=main", "init", "--quiet", workspace], { windowsHide: true });
   const jobs = new Set();
+  const controls = { releaseRecovery: null };
   const client = new FakeCopilotClient({ onSend: (session, request) => {
     const job = new Promise((resolve, reject) => {
-      setImmediate(() => emitAnswer(session, request.prompt).then(resolve, reject));
+      setImmediate(() => emitAnswer(session, request.prompt, controls).then(resolve, reject));
     });
     jobs.add(job);
     job.finally(() => jobs.delete(job));
   } });
   const chat = new CopilotChatService(workspace, { clientFactory: () => client });
-  const app = createWorkshopServer({ workspace, chat });
+  const app = createWorkshopServer({ workspace, chat, publicDirectory: process.env.LOOP_TEST_ASSETS });
   let browser;
   let page;
   let proxy;
@@ -190,6 +198,7 @@ test("actual application browser regression harness", { timeout: 300_000 }, asyn
         const content = await page.locator(".chat-message.assistant .chat-message-content").last().textContent();
         const metrics = await page.evaluate(() => ({ ...window.loopEvidence }));
         const actualHash = hash(content);
+        const elapsedMs = performance.now() - start;
         assert.equal(actualHash, evidence.expectedHash);
         assert.equal(metrics.blanks, 0);
         assert.ok(metrics.added + metrics.removed < 500, `excess DOM mutation: ${metrics.added + metrics.removed}`);
@@ -197,8 +206,14 @@ test("actual application browser regression harness", { timeout: 300_000 }, asyn
           assert.ok(metrics.paints.filter((sample) => sample >= time && sample < time + 1000).length <= 65);
         }
         assert.ok(Math.max(0, ...metrics.longTasks) <= 200, `long task exceeded 200ms: ${metrics.longTasks}`);
-        if (run >= 0) evidence.runs.push({ run, actualHash, elapsedMs: performance.now() - start, ...metrics });
+        assert.ok(elapsedMs <= 500, `local burst completion exceeded 500ms: ${elapsedMs}`);
+        if (run >= 0) evidence.runs.push({ run, actualHash, elapsedMs, ...metrics });
       }
+    });
+
+    await check("fragmented Unicode text survives the real event transport exactly", async () => {
+      await send("unicode");
+      assert.equal(await page.locator(".chat-message.assistant .chat-message-content").last().textContent(), "Unicode: \u4f60\u597d \ud83d\ude80");
     });
 
     await check("typing stays responsive through three paced 15-second streams", async () => {
@@ -249,6 +264,24 @@ test("actual application browser regression harness", { timeout: 300_000 }, asyn
       assert.ok(gap <= 48);
     });
 
+    await check("connection loss recovers a missed terminal event without losing draft or content", async () => {
+      await resetView();
+      await page.locator("#copilot-input").fill("recover");
+      await page.locator("#copilot-send").click();
+      await page.waitForFunction(() => document.querySelector("#copilot-input").value === "");
+      await page.locator(".chat-message.assistant").waitFor();
+      assert.ok(controls.releaseRecovery);
+      await page.locator("#copilot-input").fill("Retain this recovery draft");
+      app.server.closeAllConnections();
+      controls.releaseRecovery();
+      await page.waitForFunction(() => !document.querySelector("#copilot-send").disabled, undefined, { timeout: 10_000 });
+      await page.waitForFunction(() => document.querySelector(".chat-message.assistant .chat-message-content")?.textContent.length === 65536);
+      assert.equal(await page.locator("#copilot-input").inputValue(), "Retain this recovery draft");
+      assert.equal(await page.locator(".chat-message.assistant").count(), 1);
+      assert.equal(hash(await page.locator(".chat-message.assistant .chat-message-content").textContent()), evidence.expectedHash);
+      assert.equal(await page.evaluate(() => window.loopEvidence.blanks), 0);
+    });
+
     await check("reloading restores the actual service snapshot without duplicates", async () => {
       const count = await page.locator(".chat-message").count();
       await page.reload();
@@ -270,6 +303,7 @@ test("actual application browser regression harness", { timeout: 300_000 }, asyn
     writeFileSync(join(artifacts, "results.json"), `${JSON.stringify(evidence, null, 2)}\n`);
     await browser?.close();
     await proxy?.close();
+    controls.releaseRecovery?.();
     await Promise.all(jobs);
     await app.close();
     rmSync(root, { recursive: true, force: true });

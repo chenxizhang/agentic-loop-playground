@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createChatLedger, createPaintQueue, toolDetailPreview } from "../public/chat-state.js";
+import { createChatLedger, createPaintQueue, toolDetailPreview, matchesOperation, createOperationTracker } from "../public/chat-state.js";
 
 test("message identities preserve whitespace, final replacement and replay deduplication", () => {
   const ledger = createChatLedger();
@@ -98,4 +98,31 @@ test("tool previews bound property keys and escaped output as well as values", (
   for (const value of [{ ["K".repeat(5_000_000)]: "x" }, { nested: "\0".repeat(5_000_000) }]) {
     assert.ok(toolDetailPreview(value).length <= 17000, "serialized preview must retain its output bound");
   }
+});
+
+test("delayed terminal events cannot settle a newer accepted operation", () => {
+  const pending = { sessionId: "session-b", generation: 2, operationId: "operation-b" };
+  assert.equal(matchesOperation(pending, { sessionId: "session-a", generation: 1, operationId: "operation-a" }), false);
+  assert.equal(matchesOperation(pending, { ...pending, operationId: "operation-a" }), false);
+  assert.equal(matchesOperation(pending, { ...pending, sessionId: "session-a" }), false);
+  assert.equal(matchesOperation(pending, { ...pending, generation: 1 }), false);
+  assert.equal(matchesOperation(pending, pending), true);
+});
+
+test("operation tracking reconciles terminal-before-ACK and stale-idle-after-new-ACK", () => {
+  const tracker = createOperationTracker();
+  const first = { operationId: "first", generation: 1 };
+  const second = { operationId: "second", generation: 1 };
+  tracker.observe(first);
+  tracker.accept(first);
+  assert.equal(tracker.waiting, false);
+  tracker.accept(second);
+  tracker.observe(first);
+  assert.equal(tracker.waiting, true);
+  tracker.observe(second);
+  assert.equal(tracker.waiting, false);
+  tracker.clear();
+  tracker.accept({ ...first, generation: 2 });
+  tracker.observe(first);
+  assert.equal(tracker.waiting, true);
 });

@@ -1,5 +1,6 @@
-import { createChatLedger, createPaintQueue, toolDetailPreview } from "./chat-state.js";
+import { createChatLedger, createPaintQueue, toolDetailPreview, matchesOperation, createOperationTracker } from "./chat-state.js";
 import { attachCommandCompletion } from "./chat-completion.js";
+import { sameConversation, conversationStorageKey, visibleSnapshot, prepareDelivery } from "./lab-session.js";
 
 const state = {
   lessons: [],
@@ -38,11 +39,17 @@ const toolElements = new Map();
 let followChat = true;
 let chatBusy = false;
 let sending = false;
-let awaitingTerminal = false;
-let pendingOperationId = null;
-const terminalOperations = new Set();
+let commandRunning = false;
+const operationTracker = createOperationTracker();
 let recovering = null;
 let commandRegistry = { commands: [], skills: [], agents: [] };
+let chatRoute = null;
+let labSnapshot = null;
+let chatEvents = null;
+let navigationVersion = 0;
+let selectedConversation = null;
+const clientId = sessionStorage.getItem("loop-client-id") ?? crypto.randomUUID();
+sessionStorage.setItem("loop-client-id", clientId);
 const newContentButton = document.querySelector("#copilot-new-content");
 const paintQueue = createPaintQueue(paintChat);
 const commandPalette = attachCommandCompletion(copilotInput, document.querySelector("#copilot-commands"), () => commandRegistry);
@@ -55,7 +62,7 @@ async function request(path, options) {
   const response = await fetch(path, requestOptions);
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(body.error || "Request failed");
+    throw Object.assign(new Error(body.error || "Request failed"), { status: response.status, code: body.code, current: body.current });
   }
   return body;
 }
@@ -397,14 +404,14 @@ function renderMarkdown(target, markdown) {
   target.replaceChildren(fragment);
 }
 
-function addChatMessage(role, content, id) {
+function addChatMessage(role, content, id, local = false) {
   if (!content.trim()) return null;
   removeWelcome();
   const wrapper = document.createElement("div");
-  wrapper.className = `chat-message ${role}`;
+  wrapper.className = `chat-message ${local ? "local" : role}`;
   const label = document.createElement("div");
   label.className = "chat-message-label";
-  label.textContent = role === "user" ? "You" : "Copilot";
+  label.textContent = local ? "Lab guide (local)" : role === "user" ? "You" : "Copilot";
   const body = document.createElement("div");
   body.className = "chat-message-content";
   body.textContent = content;
@@ -415,7 +422,15 @@ function addChatMessage(role, content, id) {
 }
 
 function paintChat(keys) {
-  for (const key of keys) {
+  const started = performance.now();
+  let processed = 0;
+  for (let index = 0; index < keys.length; index++) {
+    if (index > 0 && performance.now() - started >= 4) {
+      for (const remaining of keys.slice(index)) paintQueue.add(remaining);
+      break;
+    }
+    const key = keys[index];
+    processed++;
     if (key.startsWith("tool:")) {
       paintTool(key.slice(5));
       continue;
@@ -429,7 +444,7 @@ function paintChat(keys) {
       continue;
     }
     if (!element) {
-      element = { body: addChatMessage(record.role, record.content, key), content: "", complete: false };
+      element = { body: addChatMessage(record.role, record.content, key, record.local === true), content: "", complete: false };
       messageElements.set(key, element);
     }
     if (element.content === record.content && element.complete === record.complete) continue;
@@ -447,7 +462,7 @@ function paintChat(keys) {
     element.complete = record.complete;
   }
   scrollChat();
-  document.dispatchEvent(new CustomEvent("loop:chat-paint", { detail: { count: keys.length } }));
+  document.dispatchEvent(new CustomEvent("loop:chat-paint", { detail: { count: processed } }));
 }
 
 function detailText(value) {
@@ -496,6 +511,246 @@ function restoreChat(snapshot) {
   if (snapshot.status) setCopilotStatus(snapshot.status);
 }
 
+function isLabChat() {
+  return state.info?.chatProtocol === "lab-v1";
+}
+
+function selectionKey(labId) {
+  return `loop:selected:${state.info.workspaceId ?? state.info.workspace}:${labId}`;
+}
+
+function writePreference(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    showToast(`Browser preference could not be saved: ${error.message}`);
+  }
+}
+
+function storeDraft() {
+  if (!chatRoute) return;
+  try {
+    localStorage.setItem(conversationStorageKey(chatRoute, "draft"), copilotInput.value);
+  } catch (error) {
+    showToast(`Draft could not be saved locally: ${error.message}`);
+  }
+}
+
+function clearLocalConversation(route) {
+  for (const kind of ["draft", "hidden", "pending-send"]) {
+    localStorage.removeItem(conversationStorageKey(route, kind));
+  }
+  if (localStorage.getItem(selectionKey(route.labId)) === route.conversationId) {
+    localStorage.removeItem(selectionKey(route.labId));
+  }
+}
+
+function hiddenHistory(route = chatRoute) {
+  if (!route) return [];
+  const key = conversationStorageKey(route, "hidden");
+  try {
+    const ids = JSON.parse(localStorage.getItem(key) ?? "[]");
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) throw new Error("Expected message identities");
+    return ids;
+  } catch (error) {
+    localStorage.removeItem(key);
+    showToast(`Saved view preference was invalid: ${error.message}`);
+    return [];
+  }
+}
+
+function labQuery() {
+  return new URLSearchParams({
+    labId: state.currentLessonId,
+    clientId,
+    ...(selectedConversation ? { conversationId: selectedConversation } : {})
+  }).toString();
+}
+
+function ownsLease() {
+  return labSnapshot?.lease?.clientId === clientId &&
+    labSnapshot.lease.conversationId === chatRoute?.conversationId;
+}
+
+function refreshSendButton() {
+  const command = isLabChat() && copilotInput.value.startsWith("/");
+  copilotSend.disabled = commandRunning || (!command && (chatBusy || sending || operationTracker.waiting));
+}
+
+function applyLabSnapshot(snapshot, sequence) {
+  if (snapshot.route.labId !== state.currentLessonId) return false;
+  if (chatRoute && !sameConversation(chatRoute, snapshot.route)) {
+    paintQueue.cancel();
+    chatLedger.reset();
+    operationTracker.clear();
+  }
+  const chat = visibleSnapshot({
+    ...snapshot.chat,
+    cursor: sequence ?? snapshot.sequence ?? snapshot.chat.cursor,
+    status: { ...snapshot.chat.status, generation: snapshot.route.generation }
+  }, hiddenHistory(snapshot.route));
+  if (!chatLedger.apply({ type: "chat.snapshot", data: chat })) return false;
+  chatRoute = snapshot.route;
+  labSnapshot = snapshot;
+  selectedConversation = chatRoute.conversationId;
+  writePreference(selectionKey(chatRoute.labId), selectedConversation);
+  const definitions = snapshot.definitions ?? {};
+  commandRegistry = {
+    commands: definitions.commands ?? [],
+    skills: definitions.skills ?? [],
+    agents: definitions.agents ?? []
+  };
+  restoreChat(chat);
+  const lesson = state.lessons.find((item) => item.id === chatRoute.labId);
+  document.querySelector("#copilot-lab-title").textContent = `Lab ${chatRoute.labId} Conversation`;
+  const intro = copilotMessages.querySelector(".copilot-welcome");
+  if (intro) {
+    intro.hidden = chat.messages.length > 0;
+    intro.querySelector("h3").textContent = lesson.title;
+    intro.querySelector("p").textContent = `${lesson.objective} ${snapshot.latestValidation?.ok === false ? "The latest checkpoint needs another iteration." : "Connect to receive guidance for this lab."}`;
+  }
+  const history = document.querySelector("#copilot-history");
+  history.replaceChildren();
+  for (const record of snapshot.history ?? []) {
+    const option = document.createElement("option");
+    option.value = record.conversationId;
+    option.textContent = `Conversation ${record.generation}${record.conversationId === chatRoute.conversationId ? " (viewing)" : ""}`;
+    history.append(option);
+  }
+  history.value = chatRoute.conversationId;
+  const agent = document.querySelector("#copilot-agent");
+  agent.replaceChildren(new Option("Default lab agent", "default"));
+  for (const entry of commandRegistry.agents) {
+    agent.append(new Option(entry.name, entry.name));
+  }
+  agent.value = typeof snapshot.selectedAgent === "string" ? snapshot.selectedAgent : snapshot.selectedAgent?.name ?? "default";
+  copilotConnect.textContent = ownsLease() ? "Connected / resume" : snapshot.lease?.busy ? "Take over" : "Connect / resume";
+  document.querySelector("#copilot-lease").textContent = ownsLease()
+    ? "This tab owns the active conversation."
+    : snapshot.lease ? "Viewing only. Connect explicitly to take over the workspace agent." : "Local lab context. Connect to start Copilot.";
+  for (const button of copilotPermissions.querySelectorAll("button")) button.disabled = !ownsLease();
+  return true;
+}
+
+async function refreshLabSnapshot() {
+  const version = navigationVersion;
+  const snapshot = await request(`/api/copilot/snapshot?${labQuery()}`);
+  if (version !== navigationVersion) return false;
+  return applyLabSnapshot(snapshot);
+}
+
+async function switchLabChat({ resume = true } = {}) {
+  const version = ++navigationVersion;
+  chatEvents?.close();
+  paintQueue.cancel();
+  chatLedger.reset();
+  operationTracker.clear();
+  chatRoute = null;
+  chatBusy = false;
+  sending = false;
+  commandRunning = false;
+  restoreChat({ status: { state: "disconnected", busy: false }, permissions: [] });
+  copilotToolStatus.textContent = `Loading Lab ${state.currentLessonId}...`;
+  try {
+    const snapshot = await request(`/api/copilot/snapshot?${labQuery()}`);
+    if (version !== navigationVersion) return;
+    applyLabSnapshot(snapshot);
+    copilotInput.value = localStorage.getItem(conversationStorageKey(chatRoute, "draft")) ?? "";
+    connectCopilotEvents();
+    const consent = sessionStorage.getItem(`loop-connected:${chatRoute.workspaceId}`) === "1";
+    if (resume && consent && !snapshot.lease?.busy &&
+        (!snapshot.lease || snapshot.lease.clientId === clientId)) await startCopilot();
+  } catch (error) {
+    if (version === navigationVersion) addActivity(error.message, "failure");
+  }
+}
+
+async function labMutation(action, extra = {}) {
+  if (!chatRoute) throw new Error("Wait for the current lab conversation to load.");
+  const version = navigationVersion;
+  try {
+    return await request(`/api/copilot/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ route: chatRoute, ...extra })
+    });
+  } catch (error) {
+    if (error.status === 409 && version === navigationVersion) {
+      await refreshLabSnapshot();
+    }
+    throw error;
+  }
+}
+
+async function runChatCommand(command) {
+  if (commandRunning) throw new Error("Wait for the current command to finish.");
+  const version = navigationVersion;
+  const submittedRoute = chatRoute;
+  const forgetting = /^\/forget(?:\s|$)/i.test(command);
+  commandRunning = true;
+  refreshSendButton();
+  copilotToolStatus.textContent = `Running ${command.split(/\s/)[0]}...`;
+  try {
+    const result = await labMutation("command", { command });
+    if (submittedRoute && !forgetting) {
+      const key = conversationStorageKey(submittedRoute, "draft");
+      if (localStorage.getItem(key) === command) localStorage.removeItem(key);
+    }
+    if (version !== navigationVersion) return;
+    if (forgetting) {
+      if (result.result?.confirmationRequired !== true) throw new Error("Conversation deletion was not prepared by the server.");
+      const query = new URLSearchParams({
+        labId: submittedRoute.labId, clientId, conversationId: result.result.conversationId
+      });
+      const target = await request(`/api/copilot/snapshot?${query}`);
+      if (version !== navigationVersion) return false;
+      if (!window.confirm(`Permanently forget conversation ${target.route.generation} in Lab ${target.route.labId}, including its native session?`)) return false;
+      const deletion = await request("/api/copilot/forget", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route: target.route, confirm: true })
+      });
+      if (deletion.result?.applicationDeleted !== true || deletion.result?.nativeSession?.deleted !== true) {
+        throw new Error("Application and native conversation deletion were not both confirmed.");
+      }
+      clearLocalConversation(target.route);
+      if (version !== navigationVersion) return;
+      if (sameConversation(chatRoute, target.route)) {
+        selectedConversation = null;
+        await switchLabChat({ resume: false });
+      } else await refreshLabSnapshot();
+      addActivity("Conversation and native session deleted.");
+      showCleanupWarnings(deletion);
+      return deletion;
+    }
+    if (/^\/clear\s*$/i.test(command)) {
+      localStorage.setItem(conversationStorageKey(chatRoute, "hidden"), JSON.stringify([
+        ...chatLedger.messages.keys(), ...chatLedger.tools.keys()
+      ]));
+    }
+    const output = result.result;
+    if (/^\/history\s+\S/i.test(command) && output?.route && output?.chat) {
+      selectedConversation = output.route.conversationId;
+      await switchLabChat({ resume: false });
+      return result;
+    }
+    const changedConversation = result.route && !sameConversation(chatRoute, result.route);
+    if (output?.action === "new" || /^\/new\s*$/i.test(command) || changedConversation) {
+      selectedConversation = changedConversation ? result.route.conversationId : null;
+      await switchLabChat();
+    } else {
+      await refreshLabSnapshot();
+    }
+    if (output !== undefined) addActivity(typeof output === "string" ? output : output.message ?? output.text ?? toolDetailPreview(output));
+    return result;
+  } finally {
+    if (version === navigationVersion) {
+      commandRunning = false;
+      refreshSendButton();
+      copilotToolStatus.textContent = chatBusy ? "Working..." : "Workspace agent";
+    }
+  }
+}
+
 function addActivity(text, stateName = "") {
   removeWelcome();
   const activity = document.createElement("div");
@@ -505,14 +760,23 @@ function addActivity(text, stateName = "") {
   scrollChat();
 }
 
+function reportChatError(error, version, action = "operation") {
+  if (version === navigationVersion) addActivity(error.message, "failure");
+  else showToast(`Previous lab ${action} failed: ${error.message}`);
+}
+
+function showCleanupWarnings(receipt) {
+  for (const warning of receipt?.result?.cleanupWarnings ?? []) {
+    addActivity(`Native cleanup warning: ${warning.message ?? warning}`, "warning");
+  }
+}
+
 function setCopilotStatus(status) {
   if (status.busy === false && status.operationId) {
-    terminalOperations.add(status.operationId);
-    if (terminalOperations.size > 32) terminalOperations.delete(terminalOperations.values().next().value);
-    if (pendingOperationId === status.operationId) awaitingTerminal = false;
+    operationTracker.observe(status);
   }
   chatBusy = Boolean(status.busy) || ["sending", "running", "awaiting-permission", "cancelling"].includes(status.state);
-  copilotSend.disabled = chatBusy || sending || awaitingTerminal;
+  refreshSendButton();
   copilotStatus.className = "copilot-status";
   if (status.state === "ready") {
     copilotStatus.classList.add("ready");
@@ -553,7 +817,10 @@ function renderPermission(data) {
 }
 
 function connectCopilotEvents() {
-  const events = new EventSource("/api/copilot/events");
+  chatEvents?.close();
+  const version = navigationVersion;
+  const events = new EventSource(`/api/copilot/events${isLabChat() ? `?${labQuery()}` : ""}`);
+  chatEvents = events;
   const eventTypes = [
     "chat.snapshot",
     "chat.status",
@@ -572,38 +839,53 @@ function connectCopilotEvents() {
     events.addEventListener(type, (event) => {
       let payload;
       let change;
+      let nextLeaseVersion;
       try {
         payload = JSON.parse(event.data);
+        if (isLabChat()) {
+          if (version !== navigationVersion || !sameConversation(chatRoute, payload)) return;
+          if (type === "chat.snapshot") {
+            applyLabSnapshot(payload.data, payload.sequence);
+            return;
+          }
+          payload = { ...payload, id: payload.sequence };
+          if (type === "chat.status") payload.data = { ...payload.data, generation: payload.generation };
+          if (Number.isInteger(payload.leaseVersion)) nextLeaseVersion = payload.leaseVersion;
+        }
         if (payload.type !== type || !payload.data || typeof payload.data !== "object") throw new Error("Invalid chat event");
         change = chatLedger.apply(payload);
       } catch (error) {
         copilotToolStatus.textContent = `Recovering chat: ${error.message}`;
-        recovering ??= request("/api/copilot/snapshot").then((snapshot) => {
+        recovering ??= (isLabChat() ? refreshLabSnapshot() : request("/api/copilot/snapshot").then((snapshot) => {
           if (chatLedger.apply({ type: "chat.snapshot", data: snapshot })) restoreChat(snapshot);
-        }).catch((failure) => { copilotToolStatus.textContent = failure.message; }).finally(() => { recovering = null; });
+        })).catch((failure) => { copilotToolStatus.textContent = failure.message; }).finally(() => { recovering = null; });
         return;
       }
       if (!change) return;
+      if (nextLeaseVersion !== undefined && nextLeaseVersion !== chatRoute.leaseVersion) {
+        chatRoute = { ...chatRoute, leaseVersion: nextLeaseVersion };
+        recovering ??= refreshLabSnapshot().catch((error) => {
+          copilotToolStatus.textContent = error.message;
+        }).finally(() => { recovering = null; });
+      }
       const data = payload.data ?? {};
+      if (type === "session.idle" || type === "chat.error") operationTracker.observe(payload);
       if (change.snapshot) restoreChat(data);
       if (change.message) paintQueue.add(change.message);
       if (change.tool) paintQueue.add(`tool:${change.tool}`);
       if (type === "chat.status") setCopilotStatus(data);
-      if (type === "session.idle") {
-        awaitingTerminal = false;
+      if (type === "session.idle" && (!operationTracker.pending || matchesOperation(operationTracker.pending, payload))) {
         copilotToolStatus.textContent = "Workspace agent";
         chatBusy = false;
         copilotSend.disabled = false;
       }
-      if (type === "chat.error") {
-        awaitingTerminal = false;
+      if (type === "chat.error" && (!operationTracker.pending || matchesOperation(operationTracker.pending, payload))) {
         chatBusy = false;
         copilotSend.disabled = false;
         addActivity(data.message, "failure");
       }
       if (type === "chat.reset") {
-        awaitingTerminal = false;
-        pendingOperationId = null;
+        operationTracker.clear();
         copilotToolStatus.textContent = "Workspace agent";
         chatBusy = false;
         copilotSend.disabled = false;
@@ -622,13 +904,33 @@ function connectCopilotEvents() {
 }
 
 async function startCopilot() {
+  const version = navigationVersion;
   setCopilotStatus({ state: "connecting" });
   try {
+    if (isLabChat()) {
+      let takeover = false;
+      if (labSnapshot?.lease && !ownsLease() &&
+          (labSnapshot.lease.clientId !== clientId || labSnapshot.lease.busy)) {
+        takeover = window.confirm(labSnapshot.lease.busy
+          ? "Stop the currently running workspace operation and take over this lab?"
+          : "Take over the idle workspace agent from another tab?");
+        if (!takeover) {
+          await refreshLabSnapshot();
+          return false;
+        }
+      }
+      const snapshot = await labMutation("activate", { takeover });
+      if (version !== navigationVersion) return false;
+      applyLabSnapshot(snapshot);
+      sessionStorage.setItem(`loop-connected:${chatRoute.workspaceId}`, "1");
+      return true;
+    }
     const status = await request("/api/copilot/start", { method: "POST" });
     setCopilotStatus(status);
     return true;
   } catch (error) {
-    setCopilotStatus({ state: "error", error: error.message });
+    if (version === navigationVersion) setCopilotStatus({ state: "error", error: error.message });
+    else showToast(`Previous lab activation failed: ${error.message}`);
     return false;
   }
 }
@@ -638,30 +940,58 @@ async function sendToCopilot(prompt) {
     showToast("Enter a message first.");
     return false;
   }
-  if (sending || chatBusy || awaitingTerminal) {
+  if (isLabChat() && prompt.startsWith("/")) {
+    const version = navigationVersion;
+    try {
+      return (await runChatCommand(prompt)) !== false;
+    } catch (error) {
+      reportChatError(error, version, "command");
+      return false;
+    }
+  }
+  if (sending || commandRunning || chatBusy || operationTracker.waiting) {
     showToast("Wait for the current operation or stop it first.");
     return false;
   }
   sending = true;
+  const version = navigationVersion;
+  const submittedRoute = chatRoute;
   copilotSend.disabled = true;
   copilotToolStatus.textContent = "Thinking…";
   try {
-    const accepted = await request("/api/copilot/message", {
+    let delivery;
+    if (submittedRoute) {
+      const key = conversationStorageKey(submittedRoute, "pending-send");
+      delivery = prepareDelivery(JSON.parse(localStorage.getItem(key) ?? "null"), prompt);
+      writePreference(key, JSON.stringify(delivery));
+    }
+    const accepted = isLabChat() ? await labMutation("message", { prompt, requestId: delivery.requestId }) : await request("/api/copilot/message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt })
     });
-    pendingOperationId = accepted.operationId;
-    awaitingTerminal = !terminalOperations.has(accepted.operationId);
+    if (submittedRoute) {
+      const key = conversationStorageKey(submittedRoute, "draft");
+      if (localStorage.getItem(key) === prompt) localStorage.removeItem(key);
+      const pendingKey = conversationStorageKey(submittedRoute, "pending-send");
+      if (JSON.parse(localStorage.getItem(pendingKey) ?? "null")?.requestId === delivery.requestId) localStorage.removeItem(pendingKey);
+    }
+    if (version !== navigationVersion) return false;
+    operationTracker.accept({ operationId: accepted.operationId, generation: accepted.route?.generation ?? accepted.generation });
+    if (accepted.terminal === true) operationTracker.observe(operationTracker.pending);
     return true;
   } catch (error) {
-    copilotSend.disabled = false;
-    copilotToolStatus.textContent = "Workspace agent";
-    addActivity(error.message, "failure");
+    if (version === navigationVersion) {
+      copilotSend.disabled = false;
+      copilotToolStatus.textContent = "Workspace agent";
+      addActivity(error.status ? error.message : `${error.message} Delivery is unconfirmed; inspect /status before retrying.`, "failure");
+    } else showToast(`Previous lab message failed: ${error.message}`);
     return false;
   } finally {
-    sending = false;
-    copilotSend.disabled = chatBusy || awaitingTerminal;
+    if (version === navigationVersion) {
+      sending = false;
+      refreshSendButton();
+    }
   }
 }
 
@@ -672,6 +1002,7 @@ async function checkLesson(id, button) {
     const result = await request(`/api/check/${id}`, { method: "POST" });
     state.progress = result.progress;
     render();
+    if (isLabChat()) await refreshLabSnapshot();
     showResults(result.ok ? `Lab ${id} Passed` : `Lab ${id} Needs Another Iteration`, result.checks);
   } catch (error) {
     showToast(error.message);
@@ -683,8 +1014,12 @@ async function checkLesson(id, button) {
 lessonNav.addEventListener("click", (event) => {
   const button = event.target.closest("[data-lesson]");
   if (!button) return;
+  storeDraft();
   state.currentLessonId = button.dataset.lesson;
+  selectedConversation = isLabChat() ? localStorage.getItem(selectionKey(state.currentLessonId)) : null;
+  if (isLabChat()) writePreference(`loop:last-lab:${state.info.workspaceId ?? state.info.workspace}`, state.currentLessonId);
   render();
+  if (isLabChat()) switchLabChat();
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
@@ -712,8 +1047,14 @@ copilotConnect.addEventListener("click", startCopilot);
 copilotForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const prompt = copilotInput.value;
-  if (await sendToCopilot(prompt) && copilotInput.value === prompt) copilotInput.value = "";
+  const version = navigationVersion;
+  if (await sendToCopilot(prompt) && version === navigationVersion && copilotInput.value === prompt) {
+    copilotInput.value = "";
+    storeDraft();
+  }
 });
+copilotInput.addEventListener("input", () => { storeDraft(); refreshSendButton(); });
+copilotInput.addEventListener("change", () => { storeDraft(); refreshSendButton(); });
 copilotInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault();
@@ -721,18 +1062,59 @@ copilotInput.addEventListener("keydown", (event) => {
   }
 });
 document.querySelector("#copilot-abort").addEventListener("click", async () => {
+  const version = navigationVersion;
   try {
-    await request("/api/copilot/abort", { method: "POST" });
+    if (isLabChat()) {
+      await labMutation("abort");
+      if (version === navigationVersion) await refreshLabSnapshot();
+    } else await request("/api/copilot/abort", { method: "POST" });
   } catch (error) {
-    addActivity(error.message, "failure");
+    reportChatError(error, version, "stop");
   }
 });
 document.querySelector("#copilot-reset").addEventListener("click", async () => {
+  const version = navigationVersion;
   try {
-    await request("/api/copilot/reset", { method: "POST" });
+    if (isLabChat()) {
+      storeDraft();
+      await labMutation("reset");
+      if (version !== navigationVersion) return;
+      selectedConversation = null;
+      await switchLabChat();
+    } else await request("/api/copilot/reset", { method: "POST" });
   } catch (error) {
-    addActivity(error.message, "failure");
+    reportChatError(error, version, "reset");
   }
+});
+document.querySelector("#copilot-history").addEventListener("change", async (event) => {
+  storeDraft();
+  selectedConversation = event.target.value;
+  await switchLabChat({ resume: false });
+});
+document.querySelector("#copilot-agent").addEventListener("change", async (event) => {
+  const version = navigationVersion;
+  try { await runChatCommand(`/agent ${event.target.value}`); }
+  catch (error) {
+    reportChatError(error, version, "agent selection");
+    if (version === navigationVersion) {
+      try { await refreshLabSnapshot(); }
+      catch (failure) { reportChatError(failure, version, "refresh"); }
+    }
+  }
+});
+document.querySelector("#copilot-forget").addEventListener("click", async () => {
+  if (!window.confirm("Permanently forget this conversation? Native SDK deletion must also be confirmed.")) return;
+  const version = navigationVersion;
+  const submittedRoute = chatRoute;
+  try {
+    const result = await labMutation("forget", { confirm: true });
+    if (result.result?.applicationDeleted !== true || result.result?.nativeSession?.deleted !== true) throw new Error("Application and native deletion were not both confirmed.");
+    clearLocalConversation(submittedRoute);
+    if (version !== navigationVersion) return;
+    selectedConversation = null;
+    await switchLabChat({ resume: false });
+    showCleanupWarnings(result);
+  } catch (error) { reportChatError(error, version, "deletion"); }
 });
 copilotMessages.addEventListener("scroll", () => {
   followChat = copilotMessages.scrollHeight - copilotMessages.clientHeight - copilotMessages.scrollTop <= 48;
@@ -746,18 +1128,20 @@ copilotPermissions.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-permission-decision]");
   if (!button) return;
   const card = button.closest("[data-permission-id]");
+  const version = navigationVersion;
   button.disabled = true;
   try {
     await request("/api/copilot/permission", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        ...(isLabChat() ? { route: chatRoute } : {}),
         requestId: card.dataset.permissionId,
         decision: button.dataset.permissionDecision
       })
     });
   } catch (error) {
-    addActivity(error.message, "failure");
+    reportChatError(error, version, "permission");
     button.disabled = false;
   }
 });
@@ -776,6 +1160,7 @@ document.querySelector("#grade-button").addEventListener("click", async () => {
     const result = await request("/api/grade", { method: "POST" });
     state.progress = result.progress;
     render();
+    if (isLabChat()) await refreshLabSnapshot();
     const checks = result.results.map((item) => ({
       ok: item.ok,
       name: `Lab ${item.id} · ${item.title}`,
@@ -879,12 +1264,17 @@ async function initialize() {
     workspacePath.title = info.workspace;
     runtimeStatus.title = `Workspace: ${info.workspace}\nRuntime: ${info.runtime}`;
     runtimeStatus.lastChild.textContent = " Local workspace";
-    state.currentLessonId = state.lessons.find((lesson) => !state.progress.completed[lesson.id])?.id ?? "00";
+    const savedLab = isLabChat() ? localStorage.getItem(`loop:last-lab:${info.workspaceId ?? info.workspace}`) : null;
+    state.currentLessonId = state.lessons.some((lesson) => lesson.id === savedLab)
+      ? savedLab : state.lessons.find((lesson) => !state.progress.completed[lesson.id])?.id ?? "00";
+    selectedConversation = isLabChat() ? localStorage.getItem(selectionKey(state.currentLessonId)) : null;
     render();
+    document.querySelector(".lab-chat-controls").hidden = !isLabChat();
+    if (isLabChat()) await switchLabChat({ resume: false });
+    else connectCopilotEvents();
   } catch (error) {
     lessonView.innerHTML = `<div class="loading">Unable to load the platform: ${escapeHtml(error.message)}</div>`;
   }
 }
 
-connectCopilotEvents();
 initialize();

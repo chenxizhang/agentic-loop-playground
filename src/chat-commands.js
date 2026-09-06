@@ -688,7 +688,7 @@ function validateApplicationArguments(command, args) {
   return null;
 }
 
-export function listChatCommandMetadata({ skills = [], agents = [] } = {}) {
+export function listChatCommandMetadata({ skills = [], agents = [] } = {}, capabilitiesProvided = false) {
   return {
     commands: CHAT_COMMAND_REGISTRY.map((command) => ({ ...command })),
     skillCandidates: skills.filter((skill) => skill.valid).map((skill) => ({
@@ -696,7 +696,7 @@ export function listChatCommandMetadata({ skills = [], agents = [] } = {}) {
       command: `/${skill.name}`,
       description: skill.description,
       source: skill.source,
-      activatable: false,
+      activatable: capabilitiesProvided,
       capabilityDependency: skill.activation.capabilityDependency
     })),
     agentCandidates: agents.filter((agent) => agent.valid).map((agent) => ({
@@ -704,13 +704,13 @@ export function listChatCommandMetadata({ skills = [], agents = [] } = {}) {
       description: agent.description,
       source: agent.source,
       tools: agent.tools,
-      activatable: false,
+      activatable: capabilitiesProvided,
       capabilityDependency: agent.activation.capabilityDependency
     }))
   };
 }
 
-export function parseChatCommand(input, definitions = {}) {
+export function parseChatCommand(input, definitions = {}, capabilitiesProvided = false) {
   if (typeof input !== "string") {
     throw new TypeError("Chat input must be a string.");
   }
@@ -753,9 +753,11 @@ export function parseChatCommand(input, definitions = {}) {
       command,
       args,
       skill,
-      activatable: false,
+      activatable: capabilitiesProvided,
       capabilityDependency: skill.activation.capabilityDependency,
-      message: `Skill ${skill.name} is discovered, but the native runtime adapter must confirm activation before execution.`,
+      message: capabilitiesProvided
+        ? `Skill ${skill.name} is verified for native runtime dispatch.`
+        : `Skill ${skill.name} is discovered, but the native runtime adapter must confirm activation before execution.`,
       sendToModel: false
     };
   }

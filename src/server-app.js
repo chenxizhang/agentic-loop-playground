@@ -4,10 +4,9 @@ import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getLesson, lessons } from "./curriculum.js";
-import { doctorChecks, passed, validateLesson } from "./validators.js";
-import { loadProgress, recordCheckpoint, saveProgress } from "./progress.js";
+import { loadProgress, recordCheckpoint } from "./progress.js";
 import { repositoryAnalysisPrerequisites } from "./repo-analyzer.js";
-import { CopilotChatService } from "./copilot-chat.js";
+import { runValidation } from "./validation-runner.js";
 
 const host = "127.0.0.1";
 const packaged = typeof __PACKAGED__ !== "undefined" && __PACKAGED__;
@@ -32,6 +31,7 @@ function sendJson(response, status, body) {
 export function createSseSubscriber(response, {
   maxQueueBytes = 256 * 1024,
   maxQueueFrames = 512,
+  maxSnapshotBytes = 12 * 1024 * 1024,
   heartbeatMs = 15_000,
   onClose = () => {}
 } = {}) {
@@ -39,7 +39,16 @@ export function createSseSubscriber(response, {
   const stats = { queuedBytes: 0, highWaterMark: 0, closed: false, slow: false };
   let blocked = false;
   let blockedHeartbeats = 0;
+  let firstEvent = true;
+  let snapshotDebt = 0;
   let heartbeat;
+  const frameFor = (event) => `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  const isDelta = (event) => event?.type === "assistant.delta" &&
+    typeof event.data?.messageId === "string" && typeof event.data?.content === "string";
+  const sameDelta = (left, right) => isDelta(left) && isDelta(right) &&
+    left.data.messageId === right.data.messageId && left.data.agentId === right.data.agentId &&
+    left.operationId === right.operationId && left.sessionId === right.sessionId &&
+    left.conversationId === right.conversationId && left.generation === right.generation;
 
   function close(slow = false) {
     if (stats.closed) return;
@@ -62,24 +71,61 @@ export function createSseSubscriber(response, {
   function drain() {
     blocked = false;
     blockedHeartbeats = 0;
+    snapshotDebt = 0;
     while (queue.length && !blocked && !stats.closed) {
-      const frame = queue.shift();
-      stats.queuedBytes -= Buffer.byteLength(frame);
+      const entry = queue.shift();
+      stats.queuedBytes -= entry.bytes;
+      const frame = entry.parts
+        ? frameFor({ ...entry.event, data: { ...entry.event.data, content: entry.parts.join("") } })
+        : entry.frame;
       blocked = !response.write(frame);
     }
   }
 
-  function write(frame) {
+  function write(frame, initialSnapshot = false, event) {
     if (stats.closed) return;
     const bytes = Buffer.byteLength(frame);
-    const pending = stats.queuedBytes + (response.writableLength ?? 0) + bytes;
+    if (initialSnapshot && !blocked && queue.length === 0 && (response.writableLength ?? 0) <= maxQueueBytes) {
+      if (bytes > maxSnapshotBytes) {
+        close(true);
+        return;
+      }
+      stats.snapshotBytes = bytes;
+      blocked = !response.write(frame);
+      snapshotDebt = blocked ? response.writableLength ?? 0 : 0;
+      return;
+    }
+    const last = queue.at(-1);
+    if (blocked && sameDelta(last?.event, event)) {
+      const contentBytes = Buffer.byteLength(JSON.stringify(event.data.content)) - 2;
+      const envelopeBytes = Buffer.byteLength(frameFor({ ...event, data: { ...event.data, content: "" } }));
+      const mergedBytes = envelopeBytes + last.contentBytes + contentBytes;
+      const pending = stats.queuedBytes - last.bytes + mergedBytes +
+        Math.max(0, (response.writableLength ?? 0) - snapshotDebt);
+      if (pending > maxQueueBytes) {
+        close(true);
+        return;
+      }
+      stats.queuedBytes += mergedBytes - last.bytes;
+      stats.highWaterMark = Math.max(stats.highWaterMark, pending);
+      last.parts.push(event.data.content);
+      last.contentBytes += contentBytes;
+      last.bytes = mergedBytes;
+      last.event = event;
+      return;
+    }
+    const pending = stats.queuedBytes + Math.max(0, (response.writableLength ?? 0) - snapshotDebt) + bytes;
     if (pending > maxQueueBytes || queue.length >= maxQueueFrames) {
       close(true);
       return;
     }
     stats.highWaterMark = Math.max(stats.highWaterMark, pending);
     if (blocked) {
-      queue.push(frame);
+      queue.push({
+        frame, event, bytes,
+        parts: isDelta(event) ? [event.data.content] : null,
+        contentBytes: isDelta(event) ? Buffer.byteLength(JSON.stringify(event.data.content)) - 2 : 0
+      });
       stats.queuedBytes += bytes;
     } else {
       blocked = !response.write(frame);
@@ -101,7 +147,9 @@ export function createSseSubscriber(response, {
     stats,
     close,
     send(event) {
-      write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      const initialSnapshot = firstEvent && event.type === "chat.snapshot";
+      firstEvent = false;
+      write(frameFor(event), initialSnapshot, event);
     }
   };
 }
@@ -109,37 +157,33 @@ export function createSseSubscriber(response, {
 export function createWorkshopServer(options = {}) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const publicDirectory = resolve(options.publicDirectory ?? defaultPublicDirectory);
-  const copilotChat = options.chat ?? new CopilotChatService(workspace);
+  const copilotChat = options.chat ?? null;
+  let coordinator = options.coordinator ?? null;
   const subscribers = new Set();
   let activePort = 0;
   let listening = null;
+  let validationTail = Promise.resolve();
 
-  function gradeCourse() {
-    const progress = loadProgress();
-    const results = lessons.map((lesson) => {
-      const checks = validateLesson(lesson.id, {
-        recordedWorktreeEvidence: Boolean(progress.evidence?.lab04Worktree)
-      });
-      const ok = passed(checks);
-      if (ok) {
-        progress.completed[lesson.id] ??= new Date().toISOString();
-      } else {
-        delete progress.completed[lesson.id];
+  function validate(kind, id = "", source = "browser") {
+    const job = validationTail.then(async () => {
+      const result = await (options.runValidation ?? runValidation)(workspace, kind, id);
+      if (kind === "check") {
+        return { ...result, progress: recordCheckpoint(id, result.ok, { workspace, source, checks: result.checks }) };
       }
-      return { id: lesson.id, title: lesson.title, ok, checks };
+      if (kind === "grade") {
+        for (const item of result.results) recordCheckpoint(item.id, item.ok, { workspace, source: "grade", checks: item.checks });
+        return { ...result, progress: loadProgress(workspace, { strict: true }) };
+      }
+      return result;
     });
-    saveProgress(progress);
-    return {
-      results,
-      score: results.filter((result) => result.ok).length * 10,
-      maximum: lessons.length * 10,
-      progress
-    };
+    // The caller receives failures; later validation jobs may still proceed.
+    validationTail = job.then(() => undefined, () => undefined);
+    return job;
   }
 
   function resetScenario() {
-    copyFileSync("scenarios/ci-repair/inventory.start.js", "practice/src/inventory.js");
-    copyFileSync("scenarios/ci-repair/inventory.test.js", "practice/test/inventory.test.js");
+    copyFileSync(join(workspace, "scenarios/ci-repair/inventory.start.js"), join(workspace, "practice/src/inventory.js"));
+    copyFileSync(join(workspace, "scenarios/ci-repair/inventory.test.js"), join(workspace, "practice/test/inventory.test.js"));
   }
 
   function canMutate(request) {
@@ -208,13 +252,61 @@ export function createWorkshopServer(options = {}) {
     });
   }
 
-  async function handleApi(request, response, pathname) {
+  async function handleLabApi(request, response, pathname, search) {
+    const target = {
+      labId: search.get("labId"),
+      clientId: search.get("clientId"),
+      ...(search.has("conversationId") ? { conversationId: search.get("conversationId") } : {})
+    };
+    if (request.method === "GET" && pathname === "/api/copilot/snapshot") {
+      return sendJson(response, 200, await coordinator.getSnapshot(target));
+    }
+    if (request.method === "GET" && pathname === "/api/copilot/status") {
+      if (!target.labId || !target.clientId) return sendJson(response, 200, { state: "disconnected", workspace, protocol: "lab-v1" });
+      return sendJson(response, 200, (await coordinator.getSnapshot(target)).chat.status);
+    }
+    if (request.method === "GET" && pathname === "/api/copilot/events") {
+      await coordinator.getSnapshot(target);
+      response.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+      });
+      let unsubscribe;
+      const subscriber = createSseSubscriber(response, {
+        ...options.sse,
+        onClose() { unsubscribe?.(); subscribers.delete(subscriber); }
+      });
+      subscribers.add(subscriber);
+      unsubscribe = await coordinator.subscribe(target, (event) => subscriber.send(event));
+      if (subscriber.stats.closed) unsubscribe();
+      return;
+    }
+    if (request.method !== "POST") return sendJson(response, 404, { error: "Chat route not found" });
+    if (!canMutate(request)) return sendJson(response, 403, { error: "Cross-origin mutation rejected" });
+    const body = await readJsonBody(request);
+    const action = pathname.split("/").at(-1);
+    if (action === "activate" || action === "start") {
+      return sendJson(response, 200, { ok: true, ...await coordinator.activate(body) });
+    }
+    if (action === "message") return sendJson(response, 202, await coordinator.send(body));
+    if (["command", "permission", "abort", "reset", "forget"].includes(action)) {
+      return sendJson(response, 200, await coordinator[action](body));
+    }
+    return sendJson(response, 404, { error: "Chat route not found" });
+  }
+
+  async function handleApi(request, response, pathname, search) {
+    if (coordinator && pathname.startsWith("/api/copilot/")) return handleLabApi(request, response, pathname, search);
     if (request.method === "GET" && pathname === "/api/health") {
       return sendJson(response, 200, { ok: true });
     }
     if (request.method === "GET" && pathname === "/api/info") {
       return sendJson(response, 200, {
         workspace,
+        workspaceId: coordinator?.workspaceId,
+        chatProtocol: coordinator ? "lab-v1" : "legacy",
         localOnly: true,
         runtime: process.version
       });
@@ -223,7 +315,7 @@ export function createWorkshopServer(options = {}) {
       return sendJson(response, 200, { lessons });
     }
     if (request.method === "GET" && pathname === "/api/progress") {
-      return sendJson(response, 200, loadProgress());
+      return sendJson(response, 200, loadProgress(workspace, { strict: true }));
     }
     if (request.method === "GET" && pathname === "/api/repository-analysis/prerequisites") {
       return sendJson(response, 200, repositoryAnalysisPrerequisites());
@@ -255,8 +347,7 @@ export function createWorkshopServer(options = {}) {
       return sendJson(response, 200, copilotChat.status);
     }
     if (request.method === "GET" && pathname === "/api/doctor") {
-      const checks = doctorChecks();
-      return sendJson(response, 200, { ok: passed(checks), checks });
+      return sendJson(response, 200, await validate("doctor"));
     }
     if (request.method === "POST" && pathname.startsWith("/api/check/")) {
       if (!canMutate(request)) {
@@ -267,19 +358,13 @@ export function createWorkshopServer(options = {}) {
       if (!lesson) {
         return sendJson(response, 404, { error: "Unknown lesson" });
       }
-      const currentProgress = loadProgress();
-      const checks = validateLesson(lesson.id, {
-        recordedWorktreeEvidence: Boolean(currentProgress.evidence?.lab04Worktree)
-      });
-      const ok = passed(checks);
-      const progress = recordCheckpoint(lesson.id, ok);
-      return sendJson(response, 200, { ok, checks, progress });
+      return sendJson(response, 200, await validate("check", lesson.id));
     }
     if (request.method === "POST" && pathname === "/api/grade") {
       if (!canMutate(request)) {
         return sendJson(response, 403, { error: "Cross-origin mutation rejected" });
       }
-      return sendJson(response, 200, gradeCourse());
+      return sendJson(response, 200, await validate("grade"));
     }
     if (request.method === "POST" && pathname === "/api/scenario/reset") {
       if (!canMutate(request)) {
@@ -379,12 +464,13 @@ export function createWorkshopServer(options = {}) {
       return;
     }
     if (url.pathname.startsWith("/api/")) {
-      handleApi(request, response, url.pathname).catch((error) => {
+      handleApi(request, response, url.pathname, url.searchParams).catch((error) => {
         if (!response.headersSent) {
           sendJson(response, error.statusCode ?? 500, {
             error: error.message,
             code: error.code,
-            ...(url.pathname.startsWith("/api/copilot/") ? { status: copilotChat.status } : {})
+            ...(error.current ? { current: error.current } : {}),
+            ...(copilotChat && url.pathname.startsWith("/api/copilot/") ? { status: copilotChat.status } : {})
           });
         } else {
           response.end();
@@ -397,13 +483,20 @@ export function createWorkshopServer(options = {}) {
 
   return {
     server,
-    chat: copilotChat,
+    get chat() { return coordinator ?? copilotChat; },
     async listen({ port = 0 } = {}) {
       if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid port: ${port}`);
       if (server.listening) return `http://${host}:${activePort}`;
       if (listening) return listening;
       listening = (async () => {
-        await copilotChat.checkAvailability?.();
+        if (!copilotChat && !coordinator) {
+          const { LabChatCoordinator } = await import("./lab-chat.js");
+          coordinator = new LabChatCoordinator(workspace, {
+            ...options.chatOptions,
+            runCheck: (id) => validate("check", id, "embedded")
+          });
+        }
+        await copilotChat?.checkAvailability?.();
         return new Promise((resolveListen, rejectListen) => {
           function onError(error) {
             server.off("listening", onListening);
@@ -428,7 +521,8 @@ export function createWorkshopServer(options = {}) {
     async close() {
       for (const subscriber of subscribers) subscriber.close();
       const stopped = await Promise.allSettled([
-        copilotChat.stop(),
+        (coordinator ?? copilotChat)?.stop(),
+        validationTail,
         new Promise((resolveClose, rejectClose) => {
           server.close((error) => {
             if (error && error.code !== "ERR_SERVER_NOT_RUNNING") rejectClose(error);

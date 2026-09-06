@@ -308,3 +308,23 @@ test("returns honest CLI-only, native-candidate, and unknown command errors", ()
   assert.equal(unknown.code, "UNKNOWN_COMMAND");
   assert.equal(unknown.sendToModel, false);
 });
+
+test("requires an explicit verified-capability opt-in before native candidate dispatch", () => {
+  const definitions = {
+    skills: [{
+      name: "loop-engineering",
+      valid: true,
+      activation: { capabilityDependency: "Native runtime confirmation required." }
+    }]
+  };
+
+  const candidate = parseChatCommand("/loop-engineering inspect", definitions);
+  const verified = parseChatCommand("/loop-engineering inspect", definitions, true);
+  const metadata = listChatCommandMetadata(definitions, true);
+
+  assert.equal(candidate.activatable, false);
+  assert.equal(verified.kind, "native-skill-candidate");
+  assert.equal(verified.activatable, true);
+  assert.match(verified.message, /verified for native runtime dispatch/);
+  assert.equal(metadata.skillCandidates[0].activatable, true);
+});

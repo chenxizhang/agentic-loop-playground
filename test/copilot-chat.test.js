@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CopilotChatService } from "../src/copilot-chat.js";
+import { CopilotChatService, findCopilotCli } from "../src/copilot-chat.js";
 import { deferred, FakeCopilotClient } from "./helpers/fake-copilot.js";
 
 function fixture(t, options = {}) {
@@ -40,22 +40,44 @@ test("service imports offline and reports an unavailable SDK without fake fallba
 test("SDK loader injection constructs the SDK-compatible client lazily", async (t) => {
   const { workspace } = fixture(t);
   let created = 0;
+  const cliPath = join(workspace, "copilot.exe");
+  const previousCliPath = process.env.COPILOT_CLI_PATH;
+  process.env.COPILOT_CLI_PATH = cliPath;
+  t.after(() => {
+    if (previousCliPath === undefined) delete process.env.COPILOT_CLI_PATH;
+    else process.env.COPILOT_CLI_PATH = previousCliPath;
+  });
   const chat = new CopilotChatService(workspace, {
     sdkLoader: async () => ({
       CopilotClient: class extends FakeCopilotClient {
         constructor(options) {
           super();
           assert.equal(options.workingDirectory, workspace);
+          assert.deepEqual(options.connection, { kind: "stdio", path: cliPath });
           created++;
         }
       },
-      RuntimeConnection: { forStdio: (options) => options }
+      RuntimeConnection: { forStdio: (options) => ({ kind: "stdio", ...options }) }
     })
   });
   t.after(() => chat.stop());
   assert.equal(created, 0);
   await chat.start();
   assert.equal(created, 1);
+});
+
+test("CLI discovery prefers a platform executable export and preserves legacy and explicit paths", (t) => {
+  const { workspace } = fixture(t);
+  const executable = join(workspace, "copilot.exe");
+  const legacyEntry = join(workspace, "index.js");
+  writeFileSync(executable, "Fixture path only; never executed.");
+  writeFileSync(legacyEntry, "Fixture path only; never executed.");
+  assert.equal(findCopilotCli({ cliPath: "", resolvePackage: () => executable }), executable);
+  assert.equal(findCopilotCli({ cliPath: "", resolvePackage: () => join(workspace, "package-entry.js") }), legacyEntry);
+  assert.equal(findCopilotCli({
+    cliPath: "explicit-override",
+    resolvePackage() { throw new Error("Package discovery must not replace the override."); }
+  }), "explicit-override");
 });
 
 test("authentication and broken transitive SDK imports are not missing-provider errors", async (t) => {
@@ -333,4 +355,60 @@ test("events before SDK acceptance are ordered after one exact accepted user mes
   assert.equal(visible[0].data.messageId, accepted.messageId);
   assert.equal(visible[0].data.content, " exact ");
   assert.equal(chat.status.busy, false);
+});
+
+test("SDK options and verified resume preserve the saved native identity and protected callback", async (t) => {
+  const { workspace, client } = fixture(t);
+  const original = await client.createSession({});
+  const chat = new CopilotChatService(workspace, {
+    clientFactory: (options) => {
+      assert.equal(options.mode, "empty");
+      assert.equal(options.baseDirectory, workspace);
+      return client;
+    },
+    clientOptions: { mode: "empty", baseDirectory: workspace },
+    sessionOptions: {
+      availableTools: ["read"], agent: "coach",
+      onPermissionRequest: () => ({ kind: "approve-once" })
+    },
+    sessionId: original.sessionId
+  });
+  t.after(() => chat.stop());
+  chat.restore({ messages: [{ id: "saved", role: "assistant", content: "Saved", complete: true }], tools: [], cursor: 10 });
+  await chat.start();
+  assert.equal(chat.session.sessionId, original.sessionId);
+  assert.equal(client.createCalls, 1);
+  assert.equal(client.resumeCalls.length, 1);
+  assert.equal(client.session.config.agent, "coach");
+  assert.deepEqual(client.session.config.availableTools, ["read"]);
+  const permission = client.session.requestPermission({ kind: "write", fileName: "protected.js" });
+  assert.equal(chat.snapshot().permissions.length, 1);
+  chat.resolvePermission(chat.snapshot().permissions[0].requestId, "reject");
+  assert.equal((await permission).kind, "reject");
+  assert.equal(chat.snapshot().messages[0].content, "Saved");
+});
+
+test("trusted prompt uses exact display text and waits for durable acceptance before publishing terminal events", async (t) => {
+  const { chat, client } = fixture(t);
+  const persisted = deferred();
+  const gate = deferred();
+  const events = [];
+  chat.subscribe((event) => events.push(event));
+  const sending = chat.send("Trusted wrapper", {
+    displayPrompt: " exact text\r\n ",
+    onAccepted: async () => {
+      persisted.resolve();
+      await gate.promise;
+    }
+  });
+  await persisted.promise;
+  client.session.emit("assistant.message", { messageId: "reply", content: "After persistence" });
+  client.session.emit("session.idle");
+  assert.equal(events.some((event) => event.type === "session.idle"), false);
+  assert.deepEqual(client.session.sent[0], { prompt: "Trusted wrapper", displayPrompt: " exact text\r\n " });
+  gate.resolve();
+  await sending;
+  assert.equal(chat.snapshot().messages[0].content, " exact text\r\n ");
+  assert.deepEqual(events.filter((event) => ["user.message", "assistant.message", "session.idle"].includes(event.type)).map((event) => event.type),
+    ["user.message", "assistant.message", "session.idle"]);
 });

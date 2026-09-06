@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const detailLimit = 64 * 1024;
 const secretKey = /authorization|cookie|password|passwd|secret|token|api[-_]?key|private[-_]?key|credential/i;
@@ -67,14 +67,20 @@ async function disposeRuntime(session, client) {
   if (errors.length) throw new AggregateError(errors, "Copilot runtime cleanup failed.");
 }
 
-function findCopilotCli() {
-  if (process.env.COPILOT_CLI_PATH) {
-    return process.env.COPILOT_CLI_PATH;
+export function findCopilotCli({
+  cliPath = process.env.COPILOT_CLI_PATH,
+  resolvePackage = createRequire(import.meta.url).resolve
+} = {}) {
+  if (cliPath) {
+    return cliPath;
   }
   try {
     const platform = process.platform === "linux" ? "linux" : process.platform;
     const packageName = `@github/copilot-${platform}-${process.arch}`;
-    const packageEntry = createRequire(import.meta.url).resolve(packageName);
+    const packageEntry = resolvePackage(packageName);
+    if (["copilot", "copilot.exe"].includes(basename(packageEntry).toLowerCase()) && existsSync(packageEntry)) {
+      return packageEntry;
+    }
     const sdkEntry = join(dirname(packageEntry), "index.js");
     if (existsSync(sdkEntry)) {
       return sdkEntry;
@@ -226,6 +232,15 @@ export class CopilotChatService {
     });
   }
 
+  restore(snapshot) {
+    if (this.session || this.starting || this.busy) {
+      throw chatError("A running chat cannot be restored.", "CHAT_BUSY", 409);
+    }
+    this.messages = new Map((snapshot.messages ?? []).map((message) => [message.id, structuredClone(message)]));
+    this.tools = new Map((snapshot.tools ?? []).map((tool) => [tool.toolCallId ?? tool.id, structuredClone(tool)]));
+    this.cursor = Math.max(this.cursor, snapshot.cursor ?? 0);
+  }
+
   subscribe(listener) {
     const snapshot = this.event("chat.snapshot");
     snapshot.data = this.snapshot();
@@ -291,7 +306,11 @@ export class CopilotChatService {
   }
 
   async createClient() {
-    const clientOptions = { workingDirectory: this.workspace, logLevel: "error" };
+    const clientOptions = {
+      workingDirectory: this.workspace,
+      logLevel: "error",
+      ...this.options.clientOptions
+    };
     if (this.options.clientFactory) return this.options.clientFactory(clientOptions);
     const { CopilotClient, RuntimeConnection } = await this.loadSdk();
     const cliPath = findCopilotCli();
@@ -336,11 +355,10 @@ export class CopilotChatService {
       if (!auth.isAuthenticated) {
         throw chatError(auth.statusMessage || "Copilot backend authentication is required. Run `copilot /login` or configure a supported token.", "AUTH_REQUIRED", 401);
       }
-      session = await client.createSession({
+      const sessionOptions = {
         model: "auto",
         streaming: true,
         workingDirectory: this.workspace,
-        onPermissionRequest: (request) => this.handlePermissionRequest(request, generation),
         systemMessage: {
           mode: "append",
           content: [
@@ -351,8 +369,21 @@ export class CopilotChatService {
             "Before modifying files, explain the observation, intended action, verification, and stop condition.",
             "Never weaken validation, fabricate evidence, expose credentials, or merge a pull request without a human decision."
           ].join("\n")
+        },
+        ...this.options.sessionOptions,
+        onPermissionRequest: (request) => this.handlePermissionRequest(request, generation)
+      };
+      if (this.options.sessionId) {
+        if (typeof client.resumeSession !== "function") {
+          throw chatError("This Copilot runtime cannot resume the saved native session.", "SESSION_RESUME_UNAVAILABLE", 503);
         }
-      });
+        session = await client.resumeSession(this.options.sessionId, sessionOptions);
+        if (session.sessionId !== this.options.sessionId) {
+          throw chatError("The runtime did not resume the requested native session.", "SESSION_RESUME_MISMATCH", 503);
+        }
+      } else {
+        session = await client.createSession(sessionOptions);
+      }
       this.assertGeneration(generation);
       this.client = client;
       this.session = session;
@@ -408,6 +439,9 @@ export class CopilotChatService {
       isSafeWorkspacePath(this.workspace, request.path)
     ) {
       return { kind: "approve-once" };
+    }
+    if (this.options.readOnly) {
+      return { kind: "reject", feedback: "The introductory lab kickoff permits only unprotected workspace reads." };
     }
 
     const requestId = randomUUID();
@@ -584,7 +618,11 @@ export class CopilotChatService {
       throw chatError("A chat operation is already in progress.", "CHAT_BUSY", 409);
     }
     const generation = this.generation;
-    const operationId = randomUUID();
+    const operationId = target.newOperationId ?? randomUUID();
+    const displayPrompt = target.displayPrompt ?? prompt;
+    if (typeof displayPrompt !== "string") {
+      throw chatError("Display text must be a string.", "INVALID_DISPLAY_PROMPT", 400);
+    }
     let pending;
     this.operationId = operationId;
     this.busy = true;
@@ -595,13 +633,21 @@ export class CopilotChatService {
       this.setStatus({ state: "running" });
       pending = { events: [], bytes: 0, error: null };
       this.pendingSend = pending;
-      const sdkMessageId = await this.session.send({ prompt });
+      const sdkMessageId = await this.session.send({
+        prompt,
+        ...(target.displayPrompt !== undefined ? { displayPrompt } : {})
+      });
+      this.assertGeneration(generation);
+      if (pending.error) throw pending.error;
+      const messageId = target.messageId ?? this.identity("user", typeof sdkMessageId === "string" ? sdkMessageId : operationId);
+      if (!target.hideUser) {
+        this.messages.set(messageId, { id: messageId, role: "user", content: displayPrompt, complete: true });
+      }
+      await target.onAccepted?.({ operationId, messageId, generation });
       this.assertGeneration(generation);
       if (pending.error) throw pending.error;
       this.pendingSend = null;
-      const messageId = this.identity("user", typeof sdkMessageId === "string" ? sdkMessageId : operationId);
-      this.messages.set(messageId, { id: messageId, role: "user", content: prompt, complete: true });
-      this.emit("user.message", { messageId, content: prompt });
+      if (!target.hideUser) this.emit("user.message", { messageId, content: displayPrompt });
       for (const event of pending.events) {
         if (generation !== this.generation || operationId !== this.operationId) break;
         this.handleSessionEvent(event);
