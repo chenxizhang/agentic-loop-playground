@@ -32,6 +32,10 @@ function temporaryWorkspace({ ignored = true, git = true } = {}) {
   return workspace;
 }
 
+function readGitExclude(workspace) {
+  return readFileSync(join(workspace, ".git", "info", "exclude"), "utf8");
+}
+
 test("stores lab-scoped versioned conversations across restarts", async (context) => {
   const workspace = temporaryWorkspace();
   context.after(() => rmSync(workspace, { recursive: true, force: true }));
@@ -227,6 +231,7 @@ test("rejects workspace junction escapes before writing", async (context) => {
   mkdirSync(outside);
   execFileSync("git", ["init", "--quiet"], { cwd: workspace });
   writeFileSync(join(workspace, ".gitignore"), ".workshop/chat/\n");
+  const excludeBefore = readGitExclude(workspace);
   symlinkSync(outside, join(workspace, ".workshop"), "junction");
   context.after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -234,6 +239,7 @@ test("rejects workspace junction escapes before writing", async (context) => {
     () => new ChatStore(workspace).createConversation("01"),
     (error) => error instanceof ChatStoreError && error.code === "CHAT_PATH_ESCAPE"
   );
+  assert.equal(readGitExclude(workspace), excludeBefore);
   assert.equal(existsSync(join(outside, "chat", "manifest.json")), false);
 });
 
@@ -241,6 +247,7 @@ test("rejects in-workspace storage junctions that bypass lexical Git ignores", a
   const workspace = temporaryWorkspace();
   const target = join(workspace, "target");
   mkdirSync(target);
+  const excludeBefore = readGitExclude(workspace);
   symlinkSync(target, join(workspace, ".workshop"), "junction");
   context.after(() => rmSync(workspace, { recursive: true, force: true }));
 
@@ -248,6 +255,7 @@ test("rejects in-workspace storage junctions that bypass lexical Git ignores", a
     () => new ChatStore(workspace).createConversation("01"),
     (error) => error instanceof ChatStoreError && error.code === "CHAT_PATH_ESCAPE"
   );
+  assert.equal(readGitExclude(workspace), excludeBefore);
   assert.equal(existsSync(join(target, "chat", "manifest.json")), false);
 });
 

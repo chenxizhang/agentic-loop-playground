@@ -678,6 +678,7 @@ export class ChatStore {
     if (!workspaceStat.isDirectory()) {
       throw new ChatStoreError("CHAT_WORKSPACE_UNAVAILABLE", `Workspace ${this.#workspace} is not a directory.`);
     }
+    await this.#assertExistingStorageHierarchySafe();
     await this.#ensureIgnored();
     await this.#ensureDirectory(".workshop");
     await this.#ensureDirectory(join(".workshop", "chat"));
@@ -827,13 +828,7 @@ export class ChatStore {
     });
   }
 
-  async #ensureDirectory(relativePath) {
-    const path = join(this.#canonicalWorkspace, relativePath);
-    await mkdir(path).catch((error) => {
-      if (error.code !== "EEXIST") {
-        throw error;
-      }
-    });
+  async #assertStorageDirectorySafe(path) {
     const pathMetadata = await lstat(path);
     const canonicalPath = await realpath(path);
     if (
@@ -843,13 +838,23 @@ export class ChatStore {
     ) {
       throw new ChatStoreError(
         "CHAT_PATH_ESCAPE",
-        `Chat storage path ${path} resolves outside the workspace.`
+        `Chat storage path ${path} must be a real directory at its canonical workspace location.`
       );
     }
     const pathStat = await stat(canonicalPath);
     if (!pathStat.isDirectory()) {
       throw new ChatStoreError("CHAT_PATH_ESCAPE", `Chat storage path ${path} is not a directory.`);
     }
+  }
+
+  async #ensureDirectory(relativePath) {
+    const path = join(this.#canonicalWorkspace, relativePath);
+    await mkdir(path).catch((error) => {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+    });
+    await this.#assertStorageDirectorySafe(path);
   }
 
   #manifestPath() {
@@ -884,6 +889,23 @@ export class ChatStore {
     }
   }
 
+  async #assertExistingStorageHierarchySafe() {
+    for (const relativePath of [
+      ".workshop",
+      join(".workshop", "chat"),
+      join(".workshop", "chat", "conversations")
+    ]) {
+      const path = join(this.#canonicalWorkspace, relativePath);
+      try {
+        await this.#assertStorageDirectorySafe(path);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+  }
+
   async #assertStorageHierarchySafe() {
     for (const relativePath of [
       ".workshop",
@@ -891,18 +913,7 @@ export class ChatStore {
       join(".workshop", "chat", "conversations")
     ]) {
       const path = join(this.#canonicalWorkspace, relativePath);
-      const pathMetadata = await lstat(path);
-      const canonicalPath = await realpath(path);
-      if (
-        pathMetadata.isSymbolicLink() ||
-        !pathIsInside(this.#canonicalWorkspace, canonicalPath) ||
-        !pathsEqual(path, canonicalPath)
-      ) {
-        throw new ChatStoreError(
-          "CHAT_PATH_ESCAPE",
-          `Chat storage path ${path} must be a real directory at its canonical workspace location.`
-        );
-      }
+      await this.#assertStorageDirectorySafe(path);
     }
   }
 
