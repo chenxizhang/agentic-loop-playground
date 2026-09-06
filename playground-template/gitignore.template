@@ -1,2 +1,3 @@
 .workshop/progress.json
 .workshop/hook-events.jsonl
+.workshop/chat/
