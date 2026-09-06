@@ -55,7 +55,7 @@
         <header class="copilot-header">
           <div>
             <span class="eyebrow">COPILOT SDK</span>
-            <h2>Lab Conversation</h2>
+            <h2 id="copilot-lab-title">Lab Conversation</h2>
             <div class="copilot-workspace" title="Active workspace">
               <span>WORKSPACE</span>
               <code id="workspace-path">Loading…</code>
@@ -63,8 +63,15 @@
             </div>
           </div>
           <div class="copilot-header-actions">
+            <button id="copilot-connect" class="copy-button" type="button">Connect / resume</button>
             <button id="copilot-reset" class="icon-button" title="New session" aria-label="New session">↻</button>
             <span id="copilot-status" class="copilot-status"><i></i>Disconnected</span>
+          </div>
+          <div class="lab-chat-controls">
+            <label>Conversation <select id="copilot-history" aria-label="Lab conversation history"></select></label>
+            <label>Agent <select id="copilot-agent" aria-label="Project agent"><option value="default">Default lab agent</option></select></label>
+            <button id="copilot-forget" class="copy-button" type="button">Forget</button>
+            <span id="copilot-lease">Local lab context. Connect to start Copilot.</span>
           </div>
         </header>
 
@@ -73,13 +80,15 @@
             <div class="brand-mark">∞</div>
             <h3>Complete the lab here</h3>
             <p>Copilot can read files, edit code, and run validation in the active workspace. File writes, shell commands, network access, and GitHub operations require your approval.</p>
-            <button id="copilot-connect" class="button button-primary">Connect GitHub Copilot</button>
           </div>
         </div>
 
         <div id="copilot-permissions" class="copilot-permissions"></div>
 
         <form id="copilot-form" class="copilot-composer">
+          <div id="copilot-commands" class="command-palette" aria-label="Chat commands" hidden></div>
+          <button id="copilot-new-content" class="copy-button" type="button" hidden>Jump to new content</button>
+          <label class="visually-hidden" for="copilot-input">Message for the current lab</label>
           <textarea id="copilot-input" rows="3" placeholder="Tell Copilot what to do. Enter to send, Shift+Enter for a new line."></textarea>
           <div class="copilot-composer-footer">
             <span id="copilot-tool-status">Workspace agent</span>

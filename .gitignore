@@ -3,5 +3,6 @@ dist/
 .playwright-mcp/
 .workshop/progress.json
 .workshop/hook-events.jsonl
+.workshop/chat/
 .workshop/tmp/
 coverage/

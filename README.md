@@ -140,6 +140,13 @@ npm run test:practice
 
 The second command is expected to fail before the learner completes Lab 06. The platform's own `npm test` command deliberately runs only tests under `test/`, keeping teaching failures separate from platform health.
 
+For application changes, use the [local end-to-end regression loop](docs/LOCAL-E2E.md).
+`npm run test:browser` opens the actual application in an isolated browser with a
+controlled runtime fixture and records layout, stream correctness, scrolling and
+input-responsiveness evidence. It uses existing browser tools and never installs
+packages. Fixture coverage, pinned-package validation and live Copilot/SSH evidence
+are separate acceptance gates.
+
 ## Recommended Copilot CLI session
 
 Start Copilot from the repository root:

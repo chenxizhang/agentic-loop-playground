@@ -20,13 +20,15 @@ function run(command, args = []) {
       output: execFileSync(command, args, {
         cwd: root,
         encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"]
       }).trim()
     };
   } catch (error) {
     return {
       ok: false,
-      output: `${error.stdout ?? ""}${error.stderr ?? ""}`.trim()
+      output: `${error.stdout ?? ""}${error.stderr ?? ""}`.trim() || (error.code === "ETIMEDOUT" ? "Command exceeded the 30 second limit." : error.message)
     };
   }
 }

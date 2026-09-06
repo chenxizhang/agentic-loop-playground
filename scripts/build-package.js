@@ -43,6 +43,14 @@ const buildResults = await Promise.all([
   build({
     ...sharedOptions,
     metafile: true,
+    entryPoints: [resolve(repositoryRoot, "src/validate-worker.js")],
+    outfile: resolve(distDirectory, "validate-worker.js"),
+    platform: "node",
+    format: "esm"
+  }),
+  build({
+    ...sharedOptions,
+    metafile: true,
     entryPoints: [resolve(repositoryRoot, "public/app.js")],
     outfile: resolve(publicDirectory, "app.js"),
     platform: "browser",

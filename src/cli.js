@@ -4,7 +4,11 @@ import { createInterface } from "node:readline/promises";
 import process from "node:process";
 import { getLesson, lessons } from "./curriculum.js";
 import { doctorChecks, passed, validateLesson } from "./validators.js";
-import { loadProgress, recordCheckpoint, saveProgress } from "./progress.js";
+import { loadProgress, ProgressStoreError, recordCheckpoint } from "./progress.js";
+
+function loadCurrentProgress() {
+  return loadProgress(process.cwd(), { strict: true });
+}
 
 function printHeader() {
   console.log("\nCOPILOT LOOP LAB");
@@ -37,7 +41,7 @@ function runCheck(id, update = true) {
     process.exitCode = 1;
     return false;
   }
-  const currentProgress = loadProgress();
+  const currentProgress = loadCurrentProgress();
   const checks = validateLesson(lesson.id, {
     recordedWorktreeEvidence: Boolean(currentProgress.evidence?.lab04Worktree)
   });
@@ -45,14 +49,14 @@ function runCheck(id, update = true) {
   printChecks(checks);
   const ok = passed(checks);
   if (update) {
-    recordCheckpoint(lesson.id, ok);
+    recordCheckpoint(lesson.id, ok, { source: "cli", checks });
   }
   console.log(ok ? "\nCheckpoint passed." : "\nCheckpoint not passed. Use the evidence above for the next loop iteration.");
   return ok;
 }
 
 function printStatus() {
-  const progress = loadProgress();
+  const progress = loadCurrentProgress();
   console.log("\nLearning progress\n");
   for (const lesson of lessons) {
     const done = Boolean(progress.completed[lesson.id]);
@@ -64,12 +68,12 @@ function printStatus() {
 }
 
 function nextLesson() {
-  const progress = loadProgress();
+  const progress = loadCurrentProgress();
   return lessons.find((lesson) => !progress.completed[lesson.id]) ?? lessons.at(-1);
 }
 
 function grade() {
-  const progress = loadProgress();
+  const progress = loadCurrentProgress();
   let score = 0;
   console.log("\nFinal assessment\n");
   for (const lesson of lessons) {
@@ -79,16 +83,13 @@ function grade() {
     const ok = passed(checks);
     if (ok) {
       score += 10;
-      progress.completed[lesson.id] ??= new Date().toISOString();
-    } else {
-      delete progress.completed[lesson.id];
     }
+    recordCheckpoint(lesson.id, ok, { source: "grade", checks });
     console.log(`${ok ? "PASS" : "FAIL"}  ${lesson.id} ${lesson.title}`);
     if (!ok) {
       printChecks(checks.filter((check) => !check.ok));
     }
   }
-  saveProgress(progress);
   const percentage = Math.round((score / (lessons.length * 10)) * 100);
   console.log(`\nScore: ${score}/${lessons.length * 10} (${percentage}%)`);
   console.log(percentage === 100
@@ -126,53 +127,62 @@ async function interactive() {
   }
 }
 
-const [command, argument] = process.argv.slice(2);
+try {
+  const [command, argument] = process.argv.slice(2);
 
-switch (command) {
-  case undefined:
-    await interactive();
-    break;
-  case "lesson": {
-    const lesson = getLesson(argument ?? nextLesson().id);
-    if (!lesson) {
-      console.error(`Unknown lesson: ${argument}`);
+  switch (command) {
+    case undefined:
+      await interactive();
+      break;
+    case "lesson": {
+      const lesson = getLesson(argument ?? nextLesson().id);
+      if (!lesson) {
+        console.error(`Unknown lesson: ${argument}`);
+        process.exitCode = 1;
+      } else {
+        printLesson(lesson);
+      }
+      break;
+    }
+    case "next":
+      printLesson(nextLesson());
+      break;
+    case "check":
+      if (argument) {
+        if (!runCheck(argument)) {
+          process.exitCode = 1;
+        }
+      } else {
+        if (!runCheck(nextLesson().id)) {
+          process.exitCode = 1;
+        }
+      }
+      break;
+    case "doctor":
+      printHeader();
+      {
+        const checks = doctorChecks();
+        printChecks(checks);
+        if (!passed(checks)) {
+          process.exitCode = 1;
+        }
+      }
+      break;
+    case "status":
+      printStatus();
+      break;
+    case "grade":
+      grade();
+      break;
+    default:
+      console.error("Usage: loop-lab [doctor|status|next|lesson ID|check ID|grade]");
       process.exitCode = 1;
-    } else {
-      printLesson(lesson);
-    }
-    break;
   }
-  case "next":
-    printLesson(nextLesson());
-    break;
-  case "check":
-    if (argument) {
-      if (!runCheck(argument)) {
-        process.exitCode = 1;
-      }
-    } else {
-      if (!runCheck(nextLesson().id)) {
-        process.exitCode = 1;
-      }
-    }
-    break;
-  case "doctor":
-    printHeader();
-    {
-      const checks = doctorChecks();
-      printChecks(checks);
-      if (!passed(checks)) {
-        process.exitCode = 1;
-      }
-    }
-    break;
-  case "status":
-    printStatus();
-    break;
-  case "grade":
-    grade();
-    break;
-  default:
-    console.error("Usage: loop-lab [doctor|status|next|lesson ID|check ID|grade]");
+} catch (error) {
+  if (error instanceof ProgressStoreError) {
+    console.error(error.message);
     process.exitCode = 1;
+  } else {
+    throw error;
+  }
 }

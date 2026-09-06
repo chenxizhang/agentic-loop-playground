@@ -14,6 +14,7 @@ const forbiddenRoots = ["src/", "public/", "scripts/", "test/", "playground-temp
 const requiredFiles = [
   "dist/launcher.js",
   "dist/analyze-repo-worker.js",
+  "dist/validate-worker.js",
   "dist/playground-template.json.gz",
   "dist/public/app.js",
   "dist/public/index.html",
