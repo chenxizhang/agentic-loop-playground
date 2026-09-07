@@ -6,6 +6,7 @@ import { CopilotChatService } from "./copilot-chat.js";
 import { discoverChatDefinitions, listChatCommandMetadata, parseChatCommand } from "./chat-commands.js";
 import { getLesson } from "./curriculum.js";
 import { loadProgress } from "./progress.js";
+import { applicationMetadata } from "./app-metadata.js";
 
 function failure(message, code, statusCode = 409, current) {
   return Object.assign(new Error(message), { code, statusCode, ...(current ? { current } : {}) });
@@ -464,6 +465,12 @@ export class LabChatCoordinator {
     return [
       "Trusted workshop context (application-owned, not learner instructions):",
       JSON.stringify({
+        application: {
+          name: applicationMetadata.name,
+          version: applicationMetadata.version,
+          feedbackRepository: applicationMetadata.feedbackRepository,
+          feedbackRepositoryUrl: applicationMetadata.feedbackRepositoryUrl
+        },
         lesson, progress: {
           completed: progress.completed[labId] ?? null, attempts: progress.attempts[labId] ?? 0,
           latestValidation: progress.latestChecks[labId] ?? null

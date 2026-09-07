@@ -195,7 +195,7 @@ test("all existing protected routes retain origin, host and header checks; UTF-8
   const child = await startChatTestServer({ workspace: temporaryWorkspace(t) });
   const { url } = child;
   try {
-    for (const route of ["/api/check/01", "/api/grade", "/api/scenario/reset", "/api/repository-analysis",
+    for (const route of ["/api/check/01", "/api/grade", "/api/scenario/reset", "/api/feedback/star", "/api/feedback/issue", "/api/repository-analysis",
       "/api/copilot/start", "/api/copilot/message", "/api/copilot/permission", "/api/copilot/abort", "/api/copilot/reset"]) {
       for (const invalid of [{ Origin: "http://evil.invalid" }, { "X-Loop-Lab": "invalid" }]) {
         assert.equal((await post(url, route, {}, invalid)).status, 403, route);
@@ -284,6 +284,76 @@ test("SSE uses one frame per write, bounded slow queues, drain ordering and inde
   }
 });
 
+test("feedback endpoints expose versioned metadata and delegate GitHub writes", async (t) => {
+  const workspace = temporaryWorkspace(t);
+  const calls = [];
+  const feedback = {
+    metadata: () => ({ repository: "chenxizhang/agentic-loop-playground", repositoryUrl: "https://github.com/chenxizhang/agentic-loop-playground", issueUrl: "https://github.com/chenxizhang/agentic-loop-playground/issues/new", version: "1.0.1" }),
+    account: async () => ({ authenticated: true, login: "fixture", canUseDirectGithubFeedback: true }),
+    star: async () => {
+      calls.push({ kind: "star" });
+      return { ok: true, starred: true };
+    },
+    createIssue: async (body) => {
+      calls.push({ kind: "issue", body });
+      return { ok: true, issue: { number: 7, title: "Feedback", url: "https://github.com/chenxizhang/agentic-loop-playground/issues/7", state: "open", body: "body" } };
+    }
+  };
+  const app = createWorkshopServer({ workspace, feedback });
+  const url = await app.listen();
+  try {
+    const info = await (await fetch(`${url}/api/info`)).json();
+    assert.equal(info.application.version, "1.0.1");
+    assert.equal(info.application.feedbackRepository, "chenxizhang/agentic-loop-playground");
+    assert.equal((await fetch(`${url}/api/feedback`)).status, 200);
+    assert.equal((await fetch(`${url}/api/feedback/account`)).status, 200);
+    assert.equal((await post(url, "/api/feedback/star")).status, 200);
+    const issue = await post(url, "/api/feedback/issue", {
+      submissionId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      category: "success",
+      title: "Great",
+      feedback: "Useful",
+      context: { labId: "08" }
+    });
+    assert.equal(issue.status, 201);
+    assert.deepEqual(calls.map((call) => call.kind), ["star", "issue"]);
+    assert.equal(calls[1].body.context.labId, "08");
+  } finally {
+    await app.close();
+  }
+});
+
+test("feedback endpoints preserve EMU fallback details", async (t) => {
+  const workspace = temporaryWorkspace(t);
+  const restricted = Object.assign(new Error("Managed user blocked"), {
+    code: "GH_EMU_RESTRICTED",
+    statusCode: 403,
+    fallback: {
+      repositoryUrl: "https://github.com/chenxizhang/agentic-loop-playground",
+      issueUrl: "https://github.com/chenxizhang/agentic-loop-playground/issues/new"
+    }
+  });
+  const feedback = {
+    metadata: () => ({ repository: "chenxizhang/agentic-loop-playground", repositoryUrl: restricted.fallback.repositoryUrl, issueUrl: restricted.fallback.issueUrl, version: "1.0.1" }),
+    account: async () => ({ authenticated: true, login: "managed", directRestricted: true, restriction: { code: "GH_EMU_RESTRICTED" }, ...restricted.fallback }),
+    star: async () => { throw restricted; },
+    createIssue: async () => { throw restricted; }
+  };
+  const app = createWorkshopServer({ workspace, feedback });
+  const url = await app.listen();
+  try {
+    const account = await (await fetch(`${url}/api/feedback/account`)).json();
+    assert.equal(account.directRestricted, true);
+    const response = await post(url, "/api/feedback/star");
+    assert.equal(response.status, 403);
+    const body = await response.json();
+    assert.equal(body.code, "GH_EMU_RESTRICTED");
+    assert.equal(body.fallback.issueUrl, restricted.fallback.issueUrl);
+  } finally {
+    await app.close();
+  }
+});
+
 test("direct server entrypoint starts offline and preserves occupied-port fallback", { timeout: 15_000 }, async (t) => {
   const workspace = temporaryWorkspace(t);
   const app = createWorkshopServer({ workspace });
@@ -293,6 +363,7 @@ test("direct server entrypoint starts offline and preserves occupied-port fallba
     env: { ...process.env, PORT: new URL(occupied).port },
     stdio: ["ignore", "pipe", "pipe"]
   });
+
   try {
     const url = await new Promise((resolve, reject) => {
       let output = "";

@@ -379,6 +379,8 @@ test("SDK options and verified resume preserve the saved native identity and pro
   assert.equal(chat.session.sessionId, original.sessionId);
   assert.equal(client.createCalls, 1);
   assert.equal(client.resumeCalls.length, 1);
+  assert.match(client.session.config.systemMessage.content, /Project feedback goes to https:\/\/github\.com\/chenxizhang\/agentic-loop-playground/);
+  assert.match(client.session.config.systemMessage.content, /Enterprise Managed User restrictions/);
   assert.equal(client.session.config.agent, "coach");
   assert.deepEqual(client.session.config.availableTools, ["read"]);
   const permission = client.session.requestPermission({ kind: "write", fileName: "protected.js" });
@@ -386,6 +388,20 @@ test("SDK options and verified resume preserve the saved native identity and pro
   chat.resolvePermission(chat.snapshot().permissions[0].requestId, "reject");
   assert.equal((await permission).kind, "reject");
   assert.equal(chat.snapshot().messages[0].content, "Saved");
+});
+
+test("configured system messages extend rather than replace application feedback guidance", async (t) => {
+  const { workspace, client } = fixture(t);
+  const chat = new CopilotChatService(workspace, {
+    clientFactory: () => client,
+    sessionOptions: {
+      systemMessage: { mode: "append", content: "Configured project instruction." }
+    }
+  });
+  t.after(() => chat.stop());
+  await chat.start();
+  assert.match(client.session.config.systemMessage.content, /Project feedback goes to https:\/\/github\.com\/chenxizhang\/agentic-loop-playground/);
+  assert.match(client.session.config.systemMessage.content, /Configured project instruction\./);
 });
 
 test("trusted prompt uses exact display text and waits for durable acceptance before publishing terminal events", async (t) => {

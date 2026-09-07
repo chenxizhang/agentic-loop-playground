@@ -6,7 +6,8 @@ const state = {
   lessons: [],
   progress: { completed: {}, attempts: {} },
   currentLessonId: "00",
-  info: null
+  info: null,
+  feedback: null
 };
 
 const lessonNav = document.querySelector("#lesson-nav");
@@ -24,6 +25,15 @@ const repositoryPrerequisites = document.querySelector("#repository-prerequisite
 const repositoryResult = document.querySelector("#repository-result");
 const repositoryForm = document.querySelector("#repository-form");
 const repositorySubmit = document.querySelector("#repository-submit");
+const starButton = document.querySelector("#star-button");
+const feedbackButton = document.querySelector("#feedback-button");
+const feedbackFallback = document.querySelector("#feedback-fallback");
+const feedbackDialog = document.querySelector("#feedback-dialog");
+const feedbackForm = document.querySelector("#feedback-form");
+const feedbackSubmit = document.querySelector("#feedback-submit");
+const feedbackResult = document.querySelector("#feedback-result");
+const feedbackMetadata = document.querySelector("#feedback-metadata");
+const feedbackRepo = document.querySelector("#feedback-repo");
 const workspacePath = document.querySelector("#workspace-path");
 const copilotMessages = document.querySelector("#copilot-messages");
 const copilotPermissions = document.querySelector("#copilot-permissions");
@@ -196,6 +206,119 @@ function showResults(title, checks, prefix = "") {
   dialogTitle.textContent = title;
   dialogContent.innerHTML = `${prefix}${resultMarkup(checks)}`;
   resultDialog.showModal();
+}
+
+function appVersion() {
+  return state.info?.application?.version ?? "unknown";
+}
+
+function feedbackRepository() {
+  return state.info?.application?.feedbackRepository ?? "chenxizhang/agentic-loop-playground";
+}
+
+function feedbackRepositoryUrl() {
+  return state.feedback?.repositoryUrl ?? state.info?.application?.feedbackRepositoryUrl ?? "https://github.com/chenxizhang/agentic-loop-playground";
+}
+
+function feedbackIssueUrl() {
+  return state.feedback?.issueUrl ?? `${feedbackRepositoryUrl()}/issues/new`;
+}
+
+function feedbackDirectRestricted() {
+  return Boolean(state.feedback?.directRestricted || state.feedback?.restriction);
+}
+
+function markFeedbackRestricted(source = {}) {
+  state.feedback = {
+    ...(state.feedback ?? {}),
+    ...(source.fallback ?? {}),
+    directRestricted: true,
+    restriction: source.restriction ?? {
+      code: source.code ?? "GH_EMU_RESTRICTED",
+      message: source.message ?? "This GitHub account cannot interact with this public repository through gh."
+    }
+  };
+  applyFeedbackAvailability();
+}
+
+function applyFeedbackAvailability() {
+  if (!feedbackDirectRestricted()) return;
+  starButton.textContent = "Open GitHub";
+  feedbackButton.textContent = "Open GitHub Issue";
+  feedbackFallback.hidden = false;
+  feedbackFallback.innerHTML = `
+    This GitHub account cannot interact with the public repo through gh.
+    <a href="${escapeHtml(feedbackRepositoryUrl())}" target="_blank" rel="noreferrer">Open the repo to star</a>
+    or
+    <a href="${escapeHtml(feedbackIssueUrl())}" target="_blank" rel="noreferrer">submit an issue</a>.
+  `;
+}
+
+function feedbackContext(extra = {}) {
+  return {
+    labId: state.currentLessonId,
+    ...extra
+  };
+}
+
+function openFeedbackDialog({ category = "feedback", title = "", feedback = "", context = {} } = {}) {
+  feedbackResult.replaceChildren();
+  feedbackRepo.textContent = feedbackRepository();
+  feedbackForm.elements.category.value = category;
+  feedbackForm.elements.title.value = title;
+  feedbackForm.elements.feedback.value = feedback;
+  feedbackForm.dataset.context = JSON.stringify(context);
+  feedbackForm.dataset.submissionId = crypto.randomUUID();
+  feedbackMetadata.textContent = feedbackDirectRestricted()
+    ? `Your enterprise-managed GitHub account may not be able to create issues here through gh. The app will open ${feedbackIssueUrl()} and keep this draft for you to copy.`
+    : `Included automatically: app version ${appVersion()}${context.score === undefined ? `, current lab ${state.currentLessonId}` : `, final score ${context.score} / ${context.maximum}`}.`;
+  feedbackSubmit.textContent = feedbackDirectRestricted() ? "Open GitHub Issue Page" : "Create GitHub Issue";
+  feedbackDialog.showModal();
+  feedbackForm.elements.feedback.focus();
+}
+
+async function copyFeedbackDraft(form, context) {
+  const formatted = [
+    form.get("feedback"),
+    "",
+    "## Context",
+    `- Category: ${form.get("category")}`,
+    `- App version: ${appVersion()}`,
+    context.labId ? `- Current lab: ${context.labId}` : "",
+    Number.isFinite(context.score) && Number.isFinite(context.maximum) ? `- Final score: ${context.score} / ${context.maximum}` : "",
+    "- Submitted from: agentic-loop-playground"
+  ].filter(Boolean).join("\n");
+  await navigator.clipboard.writeText(formatted);
+}
+
+function guideToGitHub(action) {
+  const url = action === "issue" ? feedbackIssueUrl() : feedbackRepositoryUrl();
+  const opened = window.open(url, "_blank", "noreferrer");
+  if (opened) {
+    showToast(action === "issue"
+      ? "Opened GitHub issues. Use an account that can interact with the public repository."
+      : "Opened the project repository. Use an account that can star public repositories.");
+  } else {
+    applyFeedbackAvailability();
+    showToast("Use the GitHub link in the sidebar to continue.");
+  }
+}
+
+function finalScoreActions(result) {
+  const completedAll = result.score === result.maximum;
+  const achievement = `I completed Agentic Loop Playground: ${result.score}/${result.maximum} on v${appVersion()}. ${state.info.application.feedbackRepositoryUrl}`;
+  return `
+    <section class="feedback-nudge">
+      <h3>${completedAll ? "Share your loop victory" : "Help improve the next iteration"}</h3>
+      <p>${completedAll ? "Finished every lab? Capture the score, share feedback, and star the workshop if it helped." : "Your score is useful evidence. Share what blocked you so the workshop can improve."}</p>
+      <pre>${escapeHtml(achievement)}</pre>
+      <div>
+        <button class="copy-button" data-copy-achievement="${escapeHtml(achievement)}">Copy achievement</button>
+        <button class="copy-button" data-final-feedback>Send score feedback</button>
+        <button class="copy-button" data-final-star>Star on GitHub</button>
+      </div>
+    </section>
+  `;
 }
 
 function scrollChat() {
@@ -1166,9 +1289,147 @@ document.querySelector("#grade-button").addEventListener("click", async () => {
       name: `Lab ${item.id} · ${item.title}`,
       detail: item.ok ? "Evidence accepted" : item.checks.filter((check) => !check.ok).map((check) => check.detail).join("\n")
     }));
-    showResults("Final Score", checks, `<div class="score">${result.score} / ${result.maximum}</div>`);
+    showResults("Final Score", checks, `<div class="score">${result.score} / ${result.maximum}</div>${finalScoreActions(result)}`);
   } catch (error) {
     showToast(error.message);
+  }
+});
+
+starButton.addEventListener("click", async () => {
+  if (feedbackDirectRestricted()) {
+    guideToGitHub("star");
+    return;
+  }
+  starButton.disabled = true;
+  const previous = starButton.textContent;
+  starButton.textContent = "Starring...";
+  try {
+    const receipt = await request("/api/feedback/star", { method: "POST" });
+    if (receipt.directRestricted) {
+      markFeedbackRestricted(receipt);
+      starButton.textContent = "Open GitHub";
+      showToast("Use the GitHub link in the sidebar to star with an account that has access.");
+      return;
+    }
+    starButton.textContent = "Starred";
+    showToast(`Starred ${feedbackRepository()}.`);
+  } catch (error) {
+    if (error.code === "GH_EMU_RESTRICTED") {
+      markFeedbackRestricted(error);
+      starButton.textContent = "Open GitHub";
+      showToast("Use the GitHub link in the sidebar to star with an account that has access.");
+      return;
+    }
+    starButton.textContent = previous;
+    showToast(error.message);
+  } finally {
+    starButton.disabled = false;
+  }
+});
+
+feedbackButton.addEventListener("click", () => {
+  if (feedbackDirectRestricted()) {
+    guideToGitHub("issue");
+    return;
+  }
+  openFeedbackDialog({ context: feedbackContext() });
+});
+
+feedbackForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(feedbackForm);
+  const context = feedbackContext(JSON.parse(feedbackForm.dataset.context || "{}"));
+  if (feedbackDirectRestricted()) {
+    await copyFeedbackDraft(form, context);
+    feedbackResult.innerHTML = `
+      <div class="issue-created">
+        <strong>Draft copied. Open GitHub to submit the issue.</strong>
+        <a href="${escapeHtml(feedbackIssueUrl())}" target="_blank" rel="noreferrer">${escapeHtml(feedbackIssueUrl())}</a>
+      </div>
+    `;
+    guideToGitHub("issue");
+    return;
+  }
+  feedbackSubmit.disabled = true;
+  feedbackSubmit.textContent = "Creating...";
+  feedbackResult.textContent = "";
+  try {
+    const receipt = await request("/api/feedback/issue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        submissionId: feedbackForm.dataset.submissionId,
+        category: form.get("category"),
+        title: form.get("title"),
+        feedback: form.get("feedback"),
+        context
+      })
+    });
+    if (receipt.directRestricted) {
+      markFeedbackRestricted(receipt);
+      await copyFeedbackDraft(form, context);
+      feedbackResult.innerHTML = `
+        <div class="issue-created">
+          <strong>Your managed GitHub account cannot create the issue through gh. Draft copied for manual submission.</strong>
+          <a href="${escapeHtml(feedbackIssueUrl())}" target="_blank" rel="noreferrer">${escapeHtml(feedbackIssueUrl())}</a>
+        </div>
+      `;
+      return;
+    }
+    feedbackResult.innerHTML = `
+      <div class="issue-created">
+        <strong>Created issue #${receipt.issue.number}: ${escapeHtml(receipt.issue.title)}</strong>
+        <a href="${escapeHtml(receipt.issue.url)}" target="_blank" rel="noreferrer">${escapeHtml(receipt.issue.url)}</a>
+      </div>
+    `;
+    feedbackForm.dataset.submissionId = crypto.randomUUID();
+    showToast(`Created issue #${receipt.issue.number}.`);
+  } catch (error) {
+    if (error.code === "GH_EMU_RESTRICTED") {
+      markFeedbackRestricted(error);
+      await copyFeedbackDraft(form, context);
+      feedbackResult.innerHTML = `
+        <div class="issue-created">
+          <strong>Your managed GitHub account cannot create the issue through gh. Draft copied for manual submission.</strong>
+          <a href="${escapeHtml(feedbackIssueUrl())}" target="_blank" rel="noreferrer">${escapeHtml(feedbackIssueUrl())}</a>
+        </div>
+      `;
+      return;
+    }
+    feedbackResult.innerHTML = `<div class="analysis-error">${escapeHtml(error.message)}</div>`;
+  } finally {
+    feedbackSubmit.disabled = false;
+    feedbackSubmit.textContent = feedbackDirectRestricted() ? "Open GitHub Issue Page" : "Create GitHub Issue";
+  }
+});
+
+document.querySelector("#feedback-dialog-close").addEventListener("click", () => feedbackDialog.close());
+document.querySelector("#feedback-cancel").addEventListener("click", () => feedbackDialog.close());
+feedbackDialog.addEventListener("click", (event) => {
+  if (event.target === feedbackDialog) feedbackDialog.close();
+});
+
+dialogContent.addEventListener("click", async (event) => {
+  const copy = event.target.closest("[data-copy-achievement]");
+  if (copy) {
+    await navigator.clipboard.writeText(copy.dataset.copyAchievement);
+    showToast("Achievement copied.");
+    return;
+  }
+  if (event.target.closest("[data-final-feedback]")) {
+    const score = dialogContent.querySelector(".score")?.textContent?.match(/(\d+)\s*\/\s*(\d+)/);
+    const context = score ? { score: Number(score[1]), maximum: Number(score[2]) } : {};
+    resultDialog.close();
+    openFeedbackDialog({
+      category: "success",
+      title: "Final score feedback",
+      feedback: score ? `I scored ${score[1]} / ${score[2]} and wanted to share feedback:\n\n` : "",
+      context
+    });
+    return;
+  }
+  if (event.target.closest("[data-final-star]")) {
+    starButton.click();
   }
 });
 
@@ -1252,14 +1513,18 @@ repositoryDialog.addEventListener("click", (event) => {
 
 async function initialize() {
   try {
-    const [curriculum, progress, info] = await Promise.all([
+    const [curriculum, progress, info, feedback] = await Promise.all([
       request("/api/lessons"),
       request("/api/progress"),
-      request("/api/info")
+      request("/api/info"),
+      request("/api/feedback/account").catch(() => request("/api/feedback").catch(() => null))
     ]);
     state.lessons = curriculum.lessons;
     state.progress = progress;
     state.info = info;
+    state.feedback = feedback;
+    applyFeedbackAvailability();
+    feedbackRepo.textContent = feedbackRepository();
     workspacePath.textContent = info.workspace;
     workspacePath.title = info.workspace;
     runtimeStatus.title = `Workspace: ${info.workspace}\nRuntime: ${info.runtime}`;

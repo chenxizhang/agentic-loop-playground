@@ -7,6 +7,8 @@ import { getLesson, lessons } from "./curriculum.js";
 import { loadProgress, recordCheckpoint } from "./progress.js";
 import { repositoryAnalysisPrerequisites } from "./repo-analyzer.js";
 import { runValidation } from "./validation-runner.js";
+import { applicationMetadata } from "./app-metadata.js";
+import { GitHubFeedbackService } from "./github-feedback.js";
 
 const host = "127.0.0.1";
 const packaged = typeof __PACKAGED__ !== "undefined" && __PACKAGED__;
@@ -158,6 +160,7 @@ export function createWorkshopServer(options = {}) {
   const workspace = resolve(options.workspace ?? process.cwd());
   const publicDirectory = resolve(options.publicDirectory ?? defaultPublicDirectory);
   const copilotChat = options.chat ?? null;
+  const feedback = options.feedback ?? new GitHubFeedbackService({ ...options.feedbackOptions, workspace });
   let coordinator = options.coordinator ?? null;
   const subscribers = new Set();
   let activePort = 0;
@@ -308,8 +311,20 @@ export function createWorkshopServer(options = {}) {
         workspaceId: coordinator?.workspaceId,
         chatProtocol: coordinator ? "lab-v1" : "legacy",
         localOnly: true,
-        runtime: process.version
+        runtime: process.version,
+        application: {
+          name: applicationMetadata.name,
+          version: applicationMetadata.version,
+          feedbackRepository: applicationMetadata.feedbackRepository,
+          feedbackRepositoryUrl: applicationMetadata.feedbackRepositoryUrl
+        }
       });
+    }
+    if (request.method === "GET" && pathname === "/api/feedback") {
+      return sendJson(response, 200, feedback.metadata());
+    }
+    if (request.method === "GET" && pathname === "/api/feedback/account") {
+      return sendJson(response, 200, await feedback.account());
     }
     if (request.method === "GET" && pathname === "/api/lessons") {
       return sendJson(response, 200, { lessons });
@@ -372,6 +387,19 @@ export function createWorkshopServer(options = {}) {
       }
       resetScenario();
       return sendJson(response, 200, { ok: true });
+    }
+    if (request.method === "POST" && pathname === "/api/feedback/star") {
+      if (!canMutate(request)) {
+        return sendJson(response, 403, { error: "Cross-origin mutation rejected" });
+      }
+      return sendJson(response, 200, await feedback.star());
+    }
+    if (request.method === "POST" && pathname === "/api/feedback/issue") {
+      if (!canMutate(request)) {
+        return sendJson(response, 403, { error: "Cross-origin mutation rejected" });
+      }
+      const body = await readJsonBody(request);
+      return sendJson(response, 201, await feedback.createIssue(body));
     }
     if (request.method === "POST" && pathname === "/api/repository-analysis") {
       if (!canMutate(request)) {
@@ -470,6 +498,7 @@ export function createWorkshopServer(options = {}) {
             error: error.message,
             code: error.code,
             ...(error.current ? { current: error.current } : {}),
+            ...(error.fallback ? { fallback: error.fallback } : {}),
             ...(copilotChat && url.pathname.startsWith("/api/copilot/") ? { status: copilotChat.status } : {})
           });
         } else {

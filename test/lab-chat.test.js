@@ -237,6 +237,8 @@ test("A to B to A restores exact transcript and native identity without duplicat
   assert.equal(clients[0].session.sent.length, 2);
   assert.equal(clients[0].session.sent[1].displayPrompt, exact);
   assert.match(clients[0].session.sent[1].prompt, /Trusted workshop context/);
+  assert.match(clients[0].session.sent[1].prompt, /agentic-loop-playground/);
+  assert.match(clients[0].session.sent[1].prompt, /feedbackRepositoryUrl/);
   assert.doesNotMatch(JSON.stringify(returned.chat.messages), /Trusted workshop context|SDK echo/);
 });
 

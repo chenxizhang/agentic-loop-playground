@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { applicationMetadata } from "./app-metadata.js";
 
 const detailLimit = 64 * 1024;
 const secretKey = /authorization|cookie|password|passwd|secret|token|api[-_]?key|private[-_]?key|credential/i;
@@ -45,6 +46,16 @@ function publicDetail(value) {
   const serialized = JSON.stringify(sanitized);
   if (Buffer.byteLength(serialized) <= detailLimit) return sanitized;
   return { preview: serialized.slice(0, detailLimit / 8), truncated: true, limitBytes: detailLimit };
+}
+
+function mergeSystemMessage(base, configured) {
+  if (!configured) return base;
+  const configuredContent = typeof configured.content === "string" ? configured.content : "";
+  return {
+    ...configured,
+    mode: configured.mode ?? base.mode,
+    content: [base.content, configuredContent].filter(Boolean).join("\n")
+  };
 }
 
 async function disposeRuntime(session, client) {
@@ -355,22 +366,29 @@ export class CopilotChatService {
       if (!auth.isAuthenticated) {
         throw chatError(auth.statusMessage || "Copilot backend authentication is required. Run `copilot /login` or configure a supported token.", "AUTH_REQUIRED", 401);
       }
+      const configuredSessionOptions = this.options.sessionOptions ?? {};
+      const baseSystemMessage = {
+        mode: "append",
+        content: [
+          "You are the embedded lab agent for Agentic Loop Playground.",
+          `Your working directory is ${this.workspace}.`,
+          "Operate only inside this workspace unless the user explicitly approves another boundary.",
+          "Follow repository instructions and the current lab prompt.",
+          "Before modifying files, explain the observation, intended action, verification, and stop condition.",
+          "Never weaken validation, fabricate evidence, expose credentials, or merge a pull request without a human decision.",
+          `Project feedback goes to ${applicationMetadata.feedbackRepositoryUrl}.`,
+          "When the learner is blocked, very satisfied, or dissatisfied, you may ask once whether they want to share feedback.",
+          "If they agree, collect a concise title, category, and public-safe description, preview what will be published, and use GitHub CLI only after explicit approval.",
+          "For positive feedback, you may ask whether they want to star the project; only star it after explicit approval with `gh api --method PUT /user/starred/chenxizhang/agentic-loop-playground`.",
+          "If GitHub CLI reports Enterprise Managed User restrictions, do not retry. Explain that managed accounts may not interact with this public repository and guide the learner to open https://github.com/chenxizhang/agentic-loop-playground to star it or submit an issue with an account that has access."
+        ].join("\n")
+      };
       const sessionOptions = {
         model: "auto",
         streaming: true,
         workingDirectory: this.workspace,
-        systemMessage: {
-          mode: "append",
-          content: [
-            "You are the embedded lab agent for Agentic Loop Playground.",
-            `Your working directory is ${this.workspace}.`,
-            "Operate only inside this workspace unless the user explicitly approves another boundary.",
-            "Follow repository instructions and the current lab prompt.",
-            "Before modifying files, explain the observation, intended action, verification, and stop condition.",
-            "Never weaken validation, fabricate evidence, expose credentials, or merge a pull request without a human decision."
-          ].join("\n")
-        },
-        ...this.options.sessionOptions,
+        ...configuredSessionOptions,
+        systemMessage: mergeSystemMessage(baseSystemMessage, configuredSessionOptions.systemMessage),
         onPermissionRequest: (request) => this.handlePermissionRequest(request, generation)
       };
       if (this.options.sessionId) {

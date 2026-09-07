@@ -232,6 +232,27 @@ body {
   grid-column: 1 / -1;
 }
 
+.sidebar-actions #star-button,
+.sidebar-actions #feedback-button {
+  border-color: rgba(65, 214, 147, 0.34);
+}
+
+.feedback-fallback {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid rgba(243, 189, 98, 0.28);
+  border-radius: 10px;
+  background: rgba(243, 189, 98, 0.08);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.feedback-fallback a {
+  color: var(--amber);
+}
+
 .button {
   padding: 10px 16px;
   border: 1px solid transparent;
@@ -1157,6 +1178,10 @@ dialog {
   width: min(820px, calc(100vw - 32px));
 }
 
+.feedback-dialog {
+  width: min(720px, calc(100vw - 32px));
+}
+
 dialog::backdrop {
   background: rgba(2, 8, 6, 0.76);
   backdrop-filter: blur(5px);
@@ -1197,14 +1222,23 @@ dialog::backdrop {
   padding: 24px;
 }
 
-.repository-intro {
+.feedback-content {
+  display: grid;
+  gap: 10px;
+  padding: 24px;
+}
+
+.repository-intro,
+.feedback-intro,
+.feedback-metadata {
   margin: 0 0 22px;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.65;
 }
 
-#repository-form label {
+#repository-form label,
+.feedback-content label {
   display: block;
   margin-bottom: 8px;
   color: #b9ccc5;
@@ -1231,9 +1265,54 @@ dialog::backdrop {
   font: 13px "SFMono-Regular", Consolas, monospace;
 }
 
-.repository-input-row input:focus {
+.feedback-content input,
+.feedback-content select,
+.feedback-content textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: 0;
+  background: #091511;
+  color: var(--text);
+  font: 13px Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.feedback-content textarea {
+  resize: vertical;
+}
+
+.repository-input-row input:focus,
+.feedback-content input:focus,
+.feedback-content select:focus,
+.feedback-content textarea:focus {
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgba(65, 214, 147, 0.1);
+}
+
+.feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.feedback-result {
+  min-height: 0;
+}
+
+.issue-created {
+  display: grid;
+  gap: 6px;
+  padding: 13px;
+  border: 1px solid rgba(65, 214, 147, 0.35);
+  border-radius: 11px;
+  background: var(--green-soft);
+  font-size: 12px;
+}
+
+.issue-created a {
+  color: var(--green);
 }
 
 .prerequisites {
@@ -1438,6 +1517,44 @@ dialog::backdrop {
   font-size: 34px;
   font-weight: 800;
   letter-spacing: -0.04em;
+}
+
+.feedback-nudge {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: #0a1713;
+}
+
+.feedback-nudge h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.feedback-nudge p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.feedback-nudge pre {
+  overflow: auto;
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  color: var(--text);
+  background: #091511;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.feedback-nudge div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (max-width: 1220px) {

@@ -31,6 +31,9 @@
         <nav id="lesson-nav" aria-label="Course labs"></nav>
 
         <div class="sidebar-actions">
+          <button id="star-button" class="button button-secondary">Star on GitHub</button>
+          <button id="feedback-button" class="button button-secondary">Send Feedback</button>
+          <p id="feedback-fallback" class="feedback-fallback" hidden></p>
           <button id="repository-button" class="button button-secondary repo-button">Analyze Repository</button>
           <button id="doctor-button" class="button button-secondary">Check Environment</button>
           <button id="grade-button" class="button button-primary">View Final Score</button>
@@ -112,6 +115,38 @@
         <button id="dialog-close" class="icon-button" aria-label="Close">×</button>
       </div>
       <div id="dialog-content"></div>
+    </dialog>
+
+    <dialog id="feedback-dialog" class="feedback-dialog">
+      <form id="feedback-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <span class="eyebrow">PROJECT FEEDBACK</span>
+            <h2>Share feedback</h2>
+          </div>
+          <button id="feedback-dialog-close" class="icon-button" type="button" aria-label="Close">×</button>
+        </div>
+        <div class="feedback-content">
+          <p class="feedback-intro">Your feedback will be published as a GitHub issue in <code id="feedback-repo">chenxizhang/agentic-loop-playground</code>. Review it before submitting.</p>
+          <label for="feedback-category">Category</label>
+          <select id="feedback-category" name="category">
+            <option value="feedback">General feedback</option>
+            <option value="bug">Bug or blocker</option>
+            <option value="idea">Idea</option>
+            <option value="success">Success story</option>
+          </select>
+          <label for="feedback-title">Title</label>
+          <input id="feedback-title" name="title" type="text" maxlength="120" required placeholder="What should the issue be called?">
+          <label for="feedback-text">Details</label>
+          <textarea id="feedback-text" name="feedback" rows="7" maxlength="4000" required placeholder="What happened? What would make the workshop better?"></textarea>
+          <p id="feedback-metadata" class="feedback-metadata"></p>
+          <div id="feedback-result" class="feedback-result" aria-live="polite"></div>
+          <div class="feedback-actions">
+            <button id="feedback-cancel" class="button button-secondary" type="button">Cancel</button>
+            <button id="feedback-submit" class="button button-primary" type="submit">Create GitHub Issue</button>
+          </div>
+        </div>
+      </form>
     </dialog>
 
     <dialog id="repository-dialog" class="repository-dialog">

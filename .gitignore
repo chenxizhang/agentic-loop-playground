@@ -5,4 +5,5 @@ dist/
 .workshop/hook-events.jsonl
 .workshop/chat/
 .workshop/tmp/
+.workshop/feedback-restrictions.json
 coverage/
