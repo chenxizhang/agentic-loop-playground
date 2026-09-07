@@ -289,7 +289,7 @@ test("feedback endpoints expose versioned metadata and delegate GitHub writes", 
   const workspace = temporaryWorkspace(t);
   const calls = [];
   const feedback = {
-    metadata: () => ({ repository: "chenxizhang/agentic-loop-playground", repositoryUrl: "https://github.com/chenxizhang/agentic-loop-playground", issueUrl: "https://github.com/chenxizhang/agentic-loop-playground/issues/new", version: "1.0.1" }),
+    metadata: () => ({ repository: "chenxizhang/agentic-loop-playground", repositoryUrl: "https://github.com/chenxizhang/agentic-loop-playground", issueUrl: "https://github.com/chenxizhang/agentic-loop-playground/issues/new", version: applicationMetadata.version }),
     account: async () => ({ authenticated: true, login: "fixture", canUseDirectGithubFeedback: true }),
     star: async () => {
       calls.push({ kind: "star" });
@@ -335,7 +335,7 @@ test("feedback endpoints preserve EMU fallback details", async (t) => {
     }
   });
   const feedback = {
-    metadata: () => ({ repository: "chenxizhang/agentic-loop-playground", repositoryUrl: restricted.fallback.repositoryUrl, issueUrl: restricted.fallback.issueUrl, version: "1.0.1" }),
+    metadata: () => ({ repository: "chenxizhang/agentic-loop-playground", repositoryUrl: restricted.fallback.repositoryUrl, issueUrl: restricted.fallback.issueUrl, version: applicationMetadata.version }),
     account: async () => ({ authenticated: true, login: "managed", directRestricted: true, restriction: { code: "GH_EMU_RESTRICTED" }, ...restricted.fallback }),
     star: async () => { throw restricted; },
     createIssue: async () => { throw restricted; }
