@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSseSubscriber, createWorkshopServer } from "../src/server-app.js";
 import { CopilotChatService } from "../src/copilot-chat.js";
+import { applicationMetadata } from "../src/app-metadata.js";
 import { startChatTestServer } from "./helpers/chat-test-server.js";
 
 const headers = { "Content-Type": "application/json", "X-Loop-Lab": "browser" };
@@ -303,7 +304,7 @@ test("feedback endpoints expose versioned metadata and delegate GitHub writes", 
   const url = await app.listen();
   try {
     const info = await (await fetch(`${url}/api/info`)).json();
-    assert.equal(info.application.version, "1.0.1");
+    assert.equal(info.application.version, applicationMetadata.version);
     assert.equal(info.application.feedbackRepository, "chenxizhang/agentic-loop-playground");
     assert.equal((await fetch(`${url}/api/feedback`)).status, 200);
     assert.equal((await fetch(`${url}/api/feedback/account`)).status, 200);

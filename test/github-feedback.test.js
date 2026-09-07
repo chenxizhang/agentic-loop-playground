@@ -34,7 +34,7 @@ test("formats feedback issues with app version and score context", async () => {
     context: { labId: "08", score: 90, maximum: 90 }
   });
   assert.match(formatted.title, /^\[Playground feedback\] Great lab$/);
-  assert.match(formatted.body, /App version: 1\.0\.1/);
+  assert.ok(formatted.body.includes(`- App version: ${applicationMetadata.version}`));
   assert.match(formatted.body, /Current lab: 08/);
   assert.match(formatted.body, /Final score: 90 \/ 90/);
 });
@@ -57,7 +57,7 @@ test("creates one GitHub issue per submission id and replays the receipt", async
   assert.equal(calls.length, 1);
   assert.equal(calls[0].args[0], "api");
   assert.ok(calls[0].args.includes("repos/chenxizhang/agentic-loop-playground/issues"));
-  assert.ok(calls[0].args.some((arg) => arg.includes("App version: 1.0.1")));
+  assert.ok(calls[0].args.some((arg) => arg.includes(`App version: ${applicationMetadata.version}`)));
 });
 
 test("rejects invalid feedback before running gh", async () => {
