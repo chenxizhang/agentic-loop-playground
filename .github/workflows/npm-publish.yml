@@ -3,6 +3,15 @@ name: Publish npm patch
 on:
   push:
     branches: [master]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "playground-template/**"
+      - "scripts/build-package.js"
+      - "package.json"
+      - "package-lock.json"
+      - "README.md"
+      - "LICENSE"
 
 permissions:
   contents: read
