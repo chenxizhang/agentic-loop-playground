@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { transform } from "esbuild";
 
 const packageMetadata = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const expectedFiles = ["dist", "README.md"];
+const expectedFiles = ["dist", "LICENSE", "README.md"];
 const artifacts = [
   "dist/launcher.js",
   "dist/analyze-repo-worker.js",

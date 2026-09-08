@@ -9,7 +9,7 @@ const output = execFileSync(process.execPath, [process.env.npm_execpath, ...npmA
   stdio: ["ignore", "pipe", "inherit"]
 });
 const packageFiles = JSON.parse(output)[0].files.map(({ path }) => path);
-const allowedRoots = ["README.md", "package.json", "dist/"];
+const allowedRoots = ["LICENSE", "README.md", "package.json", "dist/"];
 const forbiddenRoots = ["src/", "public/", "scripts/", "test/", "playground-template/"];
 const requiredFiles = [
   "dist/launcher.js",

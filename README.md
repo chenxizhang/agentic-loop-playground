@@ -1,10 +1,32 @@
 # Agentic Loop Playground
 
+[![CI](https://github.com/chenxizhang/agentic-loop-playground/actions/workflows/ci.yml/badge.svg)](https://github.com/chenxizhang/agentic-loop-playground/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/agentic-loop-playground)](https://www.npmjs.com/package/agentic-loop-playground)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Agentic Loop Playground** is an interactive, repository-native workshop for learning Loop Engineering by building and operating real loops with GitHub Copilot and GitHub.
+
+It turns "let an AI agent work on my repo" into a measurable operating loop: define the goal, observe evidence, isolate the action, verify deterministically, separate maker/checker roles, persist decisions, and stop safely. Learners do the work inside a real local Git repository instead of watching a slide deck.
+
+## Why use it
+
+- **Hands-on agentic coding practice:** eight labs move from local setup to issue queues, custom agents, worktrees, recurring automation, verification, and a capstone pull request.
+- **Built for GitHub-native teams:** the workshop uses GitHub Copilot CLI, GitHub Issues, pull requests, Actions, and the GitHub CLI as the loop's control plane.
+- **Safe by design:** the practice scenario is intentionally broken, elevated actions require approval, and platform validation stays separate from learner failures.
+- **Easy to run in restricted environments:** public npm, GitHub Release tarballs, and offline npm installs are all documented.
+
+## Quick links
+
+| Need | Start here |
+|---|---|
+| Try the workshop | [`npx -y agentic-loop-playground`](#run-with-npx) |
+| Learn the teaching model | [`docs/LEARNING-PATH.md`](https://github.com/chenxizhang/agentic-loop-playground/blob/master/docs/LEARNING-PATH.md) |
+| See how this repo runs its own loop | [`docs/PLATFORM-LOOP.md`](https://github.com/chenxizhang/agentic-loop-playground/blob/master/docs/PLATFORM-LOOP.md) |
+| Plan community promotion | [`docs/PROMOTION-PLAN.md`](https://github.com/chenxizhang/agentic-loop-playground/blob/master/docs/PROMOTION-PLAN.md) |
 
 ## Run with npx
 
-After the package is published, start it from any directory:
+Start it from any directory:
 
 ```shell
 npx -y agentic-loop-playground

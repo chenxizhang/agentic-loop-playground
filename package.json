@@ -1,13 +1,14 @@
 {
   "name": "agentic-loop-playground",
   "version": "1.0.1",
-  "description": "Agentic Loop Playground is a local interactive Loop Engineering workshop powered by GitHub Copilot.",
+  "description": "Interactive Loop Engineering workshop for learning safe agentic coding with GitHub Copilot CLI.",
   "type": "module",
   "bin": {
     "agentic-loop-playground": "dist/launcher.js"
   },
   "files": [
     "dist",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
@@ -45,6 +46,19 @@
     "type": "git",
     "url": "git+https://github.com/chenxizhang/agentic-loop-playground.git"
   },
+  "homepage": "https://github.com/chenxizhang/agentic-loop-playground#readme",
+  "bugs": {
+    "url": "https://github.com/chenxizhang/agentic-loop-playground/issues"
+  },
+  "keywords": [
+    "agentic-coding",
+    "agentic-loop",
+    "ai-agents",
+    "copilot-cli",
+    "github-copilot",
+    "loop-engineering",
+    "workshop"
+  ],
   "license": "MIT",
   "dependencies": {
     "@github/copilot-sdk": "1.0.11"
