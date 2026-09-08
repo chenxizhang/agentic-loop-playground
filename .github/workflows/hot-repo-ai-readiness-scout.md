@@ -12,17 +12,17 @@ permissions:
 secrets:
   GH_TOKEN:
     value: ${{ secrets.GH_TOKEN }}
-    description: GitHub token for external repository reads and future git clone operations.
+    description: Optional GitHub token for external repository reads and future git clone operations.
 tools:
   github:
     mode: local
-    github-token: ${{ secrets.GH_TOKEN }}
+    github-token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
     toolsets: [repos, issues, pull_requests]
   bash: [cat]
 steps:
   - name: Select hot public repositories
     env:
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
     run: |
       set -euo pipefail
       mkdir -p /tmp/gh-aw/data
@@ -77,7 +77,7 @@ Objective: create one issue in this repository that summarizes the ten hot publi
 
 Read `/tmp/gh-aw/data/hot-repositories.json` first. If the file is missing, empty, malformed, or contains no repositories, call `noop` with a short reason and create no issue.
 
-Analyze each repository with the GitHub MCP Server. The GitHub MCP Server is configured with the repository secret `GH_TOKEN`; use that token only for GitHub repository reads and any future external `gh` CLI or `git clone` operations. Do not use `GH_TOKEN` for Copilot inference or model access; the agent's reasoning uses the workflow `copilot-requests: write` permission through the built-in GitHub token path. Use the precomputed repository list as the only candidate set; do not replace it with live search results. For each candidate, use GitHub MCP repository tools to inspect compact evidence, prioritizing:
+Analyze each repository with the GitHub MCP Server. The GitHub MCP Server and prefetch step prefer the repository secret `GH_TOKEN` for GitHub repository reads and any future external `gh` CLI or `git clone` operations, falling back to the built-in GitHub token when that optional secret is unavailable. Do not use `GH_TOKEN` for Copilot inference or model access; the agent's reasoning uses the workflow `copilot-requests: write` permission through the built-in GitHub token path. Use the precomputed repository list as the only candidate set; do not replace it with live search results. For each candidate, use GitHub MCP repository tools to inspect compact evidence, prioritizing:
 
 - repository metadata from the candidate JSON
 - root directory listing
