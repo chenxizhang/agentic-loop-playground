@@ -85,7 +85,7 @@ Analyze each repository with the GitHub MCP Server. Use the precomputed reposito
 - common manifests such as `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, or `pom.xml`
 - short code-search checks scoped to the repository for `copilot`, `agent`, `agentic`, `AI`, `LLM`, `workflow_dispatch`, `loop`, and `verification`
 
-Keep the analysis bounded. Do not clone repositories. Do not read large files in full when directory listings, metadata, and concise excerpts are enough. If a file or directory is unavailable, record that as missing evidence instead of failing the run.
+Keep the analysis bounded. Do not clone repositories. Do not read large files in full when directory listings, metadata, and concise excerpts are enough. If a file or directory is unavailable, record that as missing evidence instead of failing the run. Treat code search as optional supplementary evidence: if GitHub code search is unavailable, rate-limited, or returns errors, continue from repository metadata, directory listings, and sampled files, and mention the limitation in the issue.
 
 ## Scoring rubric
 
@@ -107,7 +107,7 @@ Create exactly one issue in the current repository with:
   - one short detail section per repository with evidence paths inspected, missing signals, and the reasoning behind both scores
   - a final section named `Outreach caution` that says this run did not create issues in external repositories and that any outreach should be human-reviewed before posting
 
-Call `noop` instead of creating an issue when fewer than one repository can be analyzed or when GitHub MCP repository access is unavailable for the full run.
+Call `noop` instead of creating an issue only when fewer than one repository can be analyzed from metadata plus root/file evidence, or when GitHub MCP repository content access is unavailable for the full run. Do not call `noop` solely because code-search checks are unavailable or rate-limited.
 
 ## Safe Outputs
 
