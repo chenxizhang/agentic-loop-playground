@@ -58,6 +58,49 @@ steps:
               }
             ]
           }' > /tmp/gh-aw/data/hot-repositories.json
+  - name: Probe shallow repository clones
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+    run: |
+      set -euo pipefail
+      mkdir -p /tmp/gh-aw/data /tmp/gh-aw/external-repos
+      results_jsonl=/tmp/gh-aw/data/clone-results.jsonl
+      : > "$results_jsonl"
+      failures=0
+
+      jq -c '.repositories[]' /tmp/gh-aw/data/hot-repositories.json | while read -r repository; do
+        full_name="$(jq -r '.full_name' <<<"$repository")"
+        target="/tmp/gh-aw/external-repos/${full_name//\//__}"
+        log="/tmp/gh-aw/data/${full_name//\//__}-clone.log"
+        rm -rf "$target"
+
+        if timeout 120 gh repo clone "$full_name" "$target" -- --depth=1 --filter=blob:none --sparse >"$log" 2>&1; then
+          head_sha="$(git -C "$target" rev-parse --short HEAD)"
+          root_entries="$(find "$target" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')"
+          jq -n \
+            --arg repo "$full_name" \
+            --arg status success \
+            --arg target "$target" \
+            --arg head_sha "$head_sha" \
+            --argjson root_entries "$root_entries" \
+            '{repo: $repo, status: $status, target: $target, head_sha: $head_sha, root_entries: $root_entries}' >> "$results_jsonl"
+        else
+          failures=$((failures + 1))
+          message="$(tail -c 2000 "$log")"
+          jq -n \
+            --arg repo "$full_name" \
+            --arg status failed \
+            --arg message "$message" \
+            '{repo: $repo, status: $status, message: $message}' >> "$results_jsonl"
+        fi
+      done
+
+      jq -s '{generated_at: (now | todate), clones: .}' "$results_jsonl" > /tmp/gh-aw/data/clone-results.json
+      cat /tmp/gh-aw/data/clone-results.json
+      if jq -e '.clones[] | select(.status != "success")' /tmp/gh-aw/data/clone-results.json >/dev/null; then
+        echo "::error::One or more shallow repository clone probes failed."
+        exit 1
+      fi
 safe-outputs:
   create-issue:
     title-prefix: "[ai-readiness-scout] "
@@ -67,6 +110,7 @@ network:
   allowed:
     - defaults
     - "api.github.com"
+    - "github.com"
 ---
 
 # Hot Repository AI Readiness Scout
@@ -77,9 +121,10 @@ Objective: create one issue in this repository that summarizes the ten hot publi
 
 Read `/tmp/gh-aw/data/hot-repositories.json` first. If the file is missing, empty, malformed, or contains no repositories, call `noop` with a short reason and create no issue.
 
-Analyze each repository with the GitHub MCP Server. The GitHub MCP Server and prefetch step prefer the repository secret `GH_TOKEN` for GitHub repository reads and any future external `gh` CLI or `git clone` operations, falling back to the built-in GitHub token when that optional secret is unavailable. Do not use `GH_TOKEN` for Copilot inference or model access; the agent's reasoning uses the workflow `copilot-requests: write` permission through the built-in GitHub token path. Use the precomputed repository list as the only candidate set; do not replace it with live search results. For each candidate, use GitHub MCP repository tools to inspect compact evidence, prioritizing:
+Analyze each repository with the GitHub MCP Server. The GitHub MCP Server and prefetch step prefer the repository secret `GH_TOKEN` for GitHub repository reads and external `gh` CLI operations, including the shallow clone probe stored in `/tmp/gh-aw/data/clone-results.json`, falling back to the built-in GitHub token when that optional secret is unavailable. Do not use `GH_TOKEN` for Copilot inference or model access; the agent's reasoning uses the workflow `copilot-requests: write` permission through the built-in GitHub token path. Use the precomputed repository list as the only candidate set; do not replace it with live search results. For each candidate, use GitHub MCP repository tools to inspect compact evidence, prioritizing:
 
 - repository metadata from the candidate JSON
+- shallow clone probe results from `/tmp/gh-aw/data/clone-results.json`
 - root directory listing
 - `README.md`, `README`, or equivalent readme files
 - `AGENTS.md`
@@ -90,7 +135,7 @@ Analyze each repository with the GitHub MCP Server. The GitHub MCP Server and pr
 - common manifests such as `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, or `pom.xml`
 - short code-search checks scoped to the repository for `copilot`, `agent`, `agentic`, `AI`, `LLM`, `workflow_dispatch`, `loop`, and `verification`
 
-Keep the analysis bounded. Do not clone repositories. Do not read large files in full when directory listings, metadata, and concise excerpts are enough. If a file or directory is unavailable, record that as missing evidence instead of failing the run. Treat code search as optional supplementary evidence: if GitHub code search is unavailable, rate-limited, or returns errors, continue from repository metadata, directory listings, and sampled files, and mention the limitation in the issue.
+Keep the analysis bounded. Do not perform additional clones beyond the deterministic shallow clone probe. Do not read large files in full when directory listings, metadata, and concise excerpts are enough. If a file or directory is unavailable, record that as missing evidence instead of failing the run. Treat code search as optional supplementary evidence: if GitHub code search is unavailable, rate-limited, or returns errors, continue from repository metadata, directory listings, and sampled files, and mention the limitation in the issue.
 
 ## Scoring rubric
 
