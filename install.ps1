@@ -20,8 +20,12 @@ $architecture = $env:PROCESSOR_ARCHITEW6432
 if (-not $architecture) {
     $architecture = $env:PROCESSOR_ARCHITECTURE
 }
-if ($architecture -ne "AMD64") {
-    throw "Unsupported Windows architecture: $architecture. The available installer supports Windows x64."
+switch ($architecture) {
+    "AMD64" { $windowsArchitecture = "x64" }
+    "ARM64" { $windowsArchitecture = "arm64" }
+    default {
+        throw "Unsupported Windows architecture: $architecture. The available installer supports Windows x64 and ARM64."
+    }
 }
 
 & $ghCommand.Source auth status --hostname github.com 2>$null
@@ -35,7 +39,7 @@ $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 
 try {
-    $assetPattern = "agentic-loop-playground-*-win32-x64.tgz"
+    $assetPattern = "agentic-loop-playground-*-win32-$windowsArchitecture.tgz"
     Write-Host "Downloading the latest Agentic Loop Playground release..."
     & $ghCommand.Source release download --repo $repository --pattern $assetPattern --dir $temporaryDirectory
     if ($LASTEXITCODE -ne 0) {
